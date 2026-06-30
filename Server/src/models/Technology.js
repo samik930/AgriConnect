@@ -4,27 +4,37 @@ const technologySchema = new mongoose.Schema(
   {
     title: {
       type: String,
-      required: true
+      required: true,
     },
 
     description: {
       type: String,
-      required: true
+      required: true,
     },
 
-    image: {
-      type: String
+    state: {
+      type: String,
+      default: "All",
     },
 
-    videoLink: {
-      type: String
-    }
+    district: {
+      type: String,
+      default: null,
+    },
+
+    resourceLink: {
+      type: String,
+    },
+
+    publishedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
   },
   {
-    timestamps: true
+    timestamps: true,
   }
 );
 
-const Technology = mongoose.model("Technology", technologySchema);
-
-export default Technology;
+export default mongoose.model("Technology", technologySchema);

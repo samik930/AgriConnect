@@ -11,7 +11,7 @@ export const createOrder = async (req, res) => {
         message: "Cart is empty",
       });
     }
-
+    
     let totalAmount = 0;
 
     const enrichedItems = await Promise.all(

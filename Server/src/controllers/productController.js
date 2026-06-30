@@ -18,6 +18,11 @@ export const createProduct = async(req,res) => {
 export const getAllProducts = async(req,res) => {
     try {
         const prods = await Product.find().populate("farmer","name email")
+        if(!prods) {
+            return res.state(400).json({
+                message : "No products found",
+            })
+        }
         res.json(prods)
     } catch(error) {
         res.status(500).json({

@@ -29,10 +29,12 @@ const userSchema = new mongoose.Schema(
       enum: ["farmer", "customer","admin"],
       required: true,
     },
-
+    state: {
+      type: String,
+      required : true,
+    },
     address: String,
     district: String,
-    state: String,
     pincode: String,
   },
   {

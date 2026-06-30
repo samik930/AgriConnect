@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
 import connectDB from "./config/db.js";
 import app from "./app.js";
-import User from "./models/User.js";
 
 dotenv.config();
 
