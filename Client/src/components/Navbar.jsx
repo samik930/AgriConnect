@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import './Navbar.css';
 
-const Navbar = ({ onLoginClick, onSignupClick, isLoggedIn, onDashboardClick, onLogoClick }) => {
+const Navbar = ({
+  onFarmerLoginClick,
+  onCustomerLoginClick,
+  onLoginClick,
+  onSignupClick,
+  onAdminLoginClick,
+  isLoggedIn,
+  onDashboardClick,
+  onLogoClick
+}) => {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
@@ -33,8 +42,26 @@ const Navbar = ({ onLoginClick, onSignupClick, isLoggedIn, onDashboardClick, onL
             <button className="btn-primary" onClick={onDashboardClick}>Dashboard</button>
           ) : (
             <>
-              <button className="btn-secondary" onClick={onLoginClick}>Log In</button>
-              <button className="btn-primary" onClick={onSignupClick}>Sign Up</button>
+              <button
+                className="btn-role-login btn-farmer-login"
+                onClick={onFarmerLoginClick || (() => onLoginClick && onLoginClick('farmer'))}
+                title="Sign in as a Farmer"
+              >
+                🌾 Farmer Login
+              </button>
+              <button
+                className="btn-role-login btn-customer-login"
+                onClick={onCustomerLoginClick || (() => onLoginClick && onLoginClick('customer'))}
+                title="Sign in as a Customer"
+              >
+                🛒 Customer Login
+              </button>
+              <button className="btn-primary btn-signup-nav" onClick={() => onSignupClick && onSignupClick()}>
+                Sign Up
+              </button>
+              <button className="btn-admin-header" onClick={onAdminLoginClick} title="Administrator Login">
+                🛡️ Admin
+              </button>
             </>
           )}
         </div>

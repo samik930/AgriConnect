@@ -2,7 +2,9 @@
   "type": "module",
   "dependencies": {
     "@google/genai": "^2.13.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.11.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -12,15 +14,27 @@
     "google-auth-library": "^10.9.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.2",
+    "multer": "^2.5.0",
     "nodemailer": "^9.0.3",
     "passport": "^0.7.0",
-    "passport-google-oauth20": "^2.0.0"
+    "passport-google-oauth20": "^2.0.0",
+    "pg": "^8.23.1",
+    "razorpay": "^2.9.8",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
   },
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "migrate:schema": "node src/db/migrate.js",
+    "migrate:data": "node scripts/migrateData.js",
+    "seed:admin": "node scripts/seedAdmin.js",
+    "mcp:farming": "node src/mcp/farming/index.js",
+    "mcp:marketplace": "node src/mcp/marketplace/index.js",
+    "mcp:logistics": "node src/mcp/logistics/index.js",
+    "mcp:order-support": "node src/mcp/order-support/index.js",
+    "orchestrator": "node src/orchestrator/index.js"
   }
 }

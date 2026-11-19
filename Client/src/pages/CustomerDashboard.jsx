@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './FarmerDashboard.css'; // Reusing the same CSS for identical styling
+import UpdateLocationButton from '../components/UpdateLocationButton';
+import { loadRazorpayScript } from '../utils/razorpay';
+import RazorpayModal from '../components/RazorpayModal';
 
 const authFetch = (url, options = {}) => {
   return fetch(url, {
@@ -29,6 +32,16 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
 
   const [cart, setCart] = useState(null);
   const [cartLoading, setCartLoading] = useState(false);
+
+  // Razorpay Payment States
+  const [razorpayOrder, setRazorpayOrder] = useState(null);
+  const [isRzpModalOpen, setIsRzpModalOpen] = useState(false);
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
+
+  // Preload Razorpay Checkout SDK
+  useEffect(() => {
+    loadRazorpayScript();
+  }, []);
 
   // Derive nearby farmers from loaded products
   const nearbyFarmers = Array.from(new Set(products.filter(p => p.farmer).map(p => p.farmer._id)))
@@ -110,31 +123,128 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
     }
   };
 
-  const handleBuyNow = async (productId) => {
+  /**
+   * Unified Payment Initiation Pipeline via Razorpay Gateway
+   */
+  const handleInitiatePayment = async (items) => {
     if (!profileData.address) {
-      alert("Please update your profile with a valid address first.");
+      alert("Please update your profile with a delivery address first.");
       setActiveTab('profile');
       return;
     }
+
     try {
-      const res = await authFetch('/api/orders', {
+      setPaymentProcessing(true);
+      const res = await authFetch('/api/payment/create-order', {
         method: 'POST',
         body: JSON.stringify({
-          items: [{ product: productId, quantity: 1 }],
-          deliveryAddress: profileData.address
-        })
+          items,
+          deliveryAddress: profileData.address || `${profileData.district}, ${profileData.state}`,
+        }),
       });
+
+      const data = await res.json();
+      if (!res.ok) {
+        alert('Payment setup failed: ' + (data.message || 'Please check items and location.'));
+        setPaymentProcessing(false);
+        return;
+      }
+
+      setRazorpayOrder(data);
+
+      // Check if official live Razorpay keys are loaded and window.Razorpay SDK is available
+      const scriptReady = await loadRazorpayScript();
+      if (data.isConfigured && scriptReady && window.Razorpay) {
+        const options = {
+          key: data.keyId,
+          amount: data.amount,
+          currency: data.currency || 'INR',
+          name: 'AgriConnect',
+          description: `Order Payment (${data.items?.length || 1} product(s))`,
+          image: 'https://cdn-icons-png.flaticon.com/512/3246/3246328.png',
+          order_id: data.orderId,
+          handler: async function (response) {
+            await handleVerifyPayment({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              items: data.items,
+              deliveryAddress: data.deliveryAddress,
+            });
+          },
+          prefill: {
+            name: user.name || '',
+            email: user.email || '',
+            contact: user.phone || '',
+          },
+          notes: {
+            address: data.deliveryAddress,
+          },
+          theme: {
+            color: '#10b981',
+          },
+        };
+        const rzp = new window.Razorpay(options);
+        rzp.on('payment.failed', function (resp) {
+          alert('Payment failed: ' + (resp.error?.description || 'Transaction declined.'));
+        });
+        rzp.open();
+      } else {
+        // Open Razorpay Test Sandbox Modal (Credentials pending in .env)
+        setIsRzpModalOpen(true);
+      }
+    } catch (err) {
+      console.error('Payment initiation error:', err);
+      alert('Failed to initiate payment gateway: ' + err.message);
+    } finally {
+      setPaymentProcessing(false);
+    }
+  };
+
+  /**
+   * Complete payment verification and place order
+   */
+  const handleVerifyPayment = async (payload) => {
+    try {
+      setPaymentProcessing(true);
+      const res = await authFetch('/api/payment/verify', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
       if (res.ok) {
-        alert('Order placed successfully!');
+        alert('🎉 Payment verified successfully! Your order has been placed.');
+        setIsRzpModalOpen(false);
+        setRazorpayOrder(null);
         fetchOrders();
+        fetchCart();
         setActiveTab('orders');
       } else {
-        const err = await res.json();
-        alert('Error: ' + err.message);
+        alert('Payment verification failed: ' + (data.message || 'Please contact support.'));
       }
-    } catch (e) {
-      alert('Failed to place order.');
+    } catch (err) {
+      console.error('Verification error:', err);
+      alert('Verification error: ' + err.message);
+    } finally {
+      setPaymentProcessing(false);
     }
+  };
+
+  const handleBuyNow = (productId) => {
+    handleInitiatePayment([{ product: productId, quantity: 1 }]);
+  };
+
+  const handleCartCheckout = () => {
+    if (!cart || !cart.items || cart.items.length === 0) {
+      alert('Your cart is empty.');
+      return;
+    }
+    const items = cart.items.map((i) => ({
+      product: i.product?._id || i.product?.id,
+      quantity: i.quantity,
+    }));
+    handleInitiatePayment(items);
   };
 
   const handleRemoveFromCart = async (productId) => {
@@ -218,13 +328,18 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
         ) : (
           <div className="products-grid">
             {displayProducts.map(p => (
-              <div className="product-card" key={p._id}>
+              <div className="product-card" key={p._id || p.id}>
+                {(p.image || p.imageUrl) && (
+                  <div style={{ width: '100%', height: '160px', overflow: 'hidden', borderRadius: '8px', marginBottom: '12px', background: 'rgba(0,0,0,0.2)' }}>
+                    <img src={p.image || p.imageUrl} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                )}
                 <span className="product-badge">{p.category}</span>
                 <div className="product-name">{p.name}</div>
                 <div className="product-price">₹{p.price}/{p.unit || 'kg'}</div>
                 <div className="product-meta" style={{ marginTop: '10px' }}>
-                  <span>👨‍🌾 Farmer: {p.farmer?.name || 'John'}</span><br/>
-                  <span>📍 District: {p.farmer?.district || 'Unknown'}</span>
+                  <span>👨‍🌾 Farmer: {p.farmer?.name || 'Local Farmer'}</span><br/>
+                  <span>📍 District: {p.farmer?.district || 'Nearby'}</span>
                 </div>
                 {!compact && (
                   <div className="product-actions" style={{ marginTop: '15px', display: 'flex', gap: '8px' }}>
@@ -266,8 +381,18 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
                 <p style={{ margin: 0, color: 'var(--color-text-muted)' }}>Quantity: {order.items?.length || 0} items • Price: ₹{order.totalAmount}</p>
                 <p style={{ margin: '5px 0 0 0', fontSize: '0.85rem', color: '#666' }}>Order Date: {new Date(order.createdAt).toLocaleDateString()}</p>
               </div>
-              <div style={{ background: 'rgba(16,185,129,0.1)', color: 'var(--color-primary)', padding: '6px 12px', borderRadius: '20px', fontWeight: 600, fontSize: '0.9rem' }}>
-                {order.orderStatus || 'Pending'}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+                <div style={{ background: 'rgba(16,185,129,0.1)', color: 'var(--color-primary)', padding: '6px 12px', borderRadius: '20px', fontWeight: 600, fontSize: '0.85rem' }}>
+                  {order.orderStatus || 'Pending'}
+                </div>
+                <div style={{ fontSize: '0.78rem', color: order.paymentStatus === 'Paid' ? '#10b981' : '#f59e0b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  {order.paymentStatus === 'Paid' ? '💳 Paid via Razorpay' : '⏳ Payment Pending'}
+                </div>
+                {order.paymentId && (
+                  <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', fontFamily: 'monospace' }}>
+                    Ref: {order.paymentId}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -296,12 +421,19 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
                 <p style={{ margin: '5px 0 0 0', fontSize: '0.85rem', color: '#666' }}>Price: ₹{item.product?.price || 0}</p>
               </div>
               <div style={{ display: 'flex', gap: '10px' }}>
-                <button className="btn-sm" style={{ padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }} onClick={() => handleBuyNow(item.product?._id)}>Buy</button>
-                <button className="btn-sm" style={{ padding: '8px 16px', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }} onClick={() => handleRemoveFromCart(item.product?._id)}>Remove</button>
+                <button className="btn-sm" style={{ padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }} onClick={() => handleBuyNow(item.product?._id)} disabled={paymentProcessing}>Buy</button>
+                <button className="btn-sm" style={{ padding: '8px 16px', background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }} onClick={() => handleRemoveFromCart(item.product?._id)} disabled={paymentProcessing}>Remove</button>
               </div>
             </div>
           ))}
-          <button className="btn-primary" style={{ marginTop: '20px', padding: '12px 32px', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700, background: 'var(--color-primary)', color: '#fff', alignSelf: 'flex-start' }}>Checkout Now</button>
+          <button 
+            className="btn-primary" 
+            style={{ marginTop: '20px', padding: '12px 32px', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700, background: 'var(--color-primary)', color: '#fff', alignSelf: 'flex-start' }}
+            onClick={handleCartCheckout}
+            disabled={paymentProcessing}
+          >
+            {paymentProcessing ? 'Setting up Razorpay...' : '💳 Checkout Now with Razorpay'}
+          </button>
         </div>
       )}
     </>
@@ -360,6 +492,24 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
         <button className="btn-primary" style={{ padding: '12px 32px', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700, background: 'var(--color-primary)', color: '#fff' }}>
           Update Profile
         </button>
+        <div style={{ marginTop: '12px' }}>
+          <UpdateLocationButton onUpdated={(updated) => {
+            setProfileData(prev => ({
+              ...prev,
+              state:    updated.state    || prev.state,
+              district: updated.district || prev.district,
+              address:  updated.address  || prev.address,
+            }));
+          }} />
+          {user.location?.coordinates?.length === 2
+            ? <p style={{ fontSize: '0.78rem', color: '#86efac', marginTop: 4 }}>
+                📌 Coordinates saved: [{user.location.coordinates[1].toFixed(4)}, {user.location.coordinates[0].toFixed(4)}]
+              </p>
+            : <p style={{ fontSize: '0.78rem', color: '#fca5a5', marginTop: 4 }}>
+                ⚠ No location saved yet — click above to set it.
+              </p>
+          }
+        </div>
       </div>
     </>
   );
@@ -411,6 +561,19 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
       <main className="dashboard-main">
         {renderContent()}
       </main>
+
+      {/* Razorpay Checkout Modal (Sandbox / Real Gateway) */}
+      <RazorpayModal
+        isOpen={isRzpModalOpen}
+        orderData={razorpayOrder}
+        user={user}
+        onSuccess={handleVerifyPayment}
+        onClose={() => {
+          setIsRzpModalOpen(false);
+          setRazorpayOrder(null);
+        }}
+        isProcessing={paymentProcessing}
+      />
     </div>
   );
 };

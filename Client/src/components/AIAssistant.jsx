@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import axios from "axios";
 
 const MODES = {
+  AGENT: "agent",
   CHAT: "chat",
   CROP: "crop",
 };
@@ -14,16 +15,52 @@ const EMPTY_CROP_FORM = {
   question: "",
 };
 
+const AgentStepsDropdown = ({ steps }) => {
+  const [open, setOpen] = useState(false);
+  if (!steps || steps.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: "6px" }}>
+      <button
+        type="button"
+        className="ai-agent-details-toggle"
+        onClick={() => setOpen(!open)}
+      >
+        {open ? "▼ Hide agent steps" : `▶ View agent execution (${steps.length} steps)`}
+      </button>
+      {open && (
+        <div className="ai-agent-steps-box">
+          {steps.map((st, i) => (
+            <div key={i} style={{ marginBottom: i < steps.length - 1 ? "8px" : "0" }}>
+              <div style={{ fontWeight: 600, color: "var(--color-primary)" }}>
+                Step {i + 1}: {st.agent}
+              </div>
+              <div style={{ fontSize: "0.74rem", opacity: 0.9 }}>
+                <strong>Task:</strong> {st.task}
+              </div>
+              {st.error && (
+                <div style={{ color: "#ef4444", fontSize: "0.72rem" }}>
+                  Error: {st.error}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const AIAssistant = () => {
-  const [mode, setMode] = useState(MODES.CHAT);
+  const [mode, setMode] = useState(MODES.AGENT);
   const [messages, setMessages] = useState([
     {
       role: "ai",
-      text: "Hello farmer 👨‍🌾! I'm your AI farming assistant powered by Gemini.\n\nChoose a mode:\n• **Ask AI** — Ask anything about crops, diseases, fertilizers, or farming practices.\n• **Crop Suggestion** — Get personalized crop recommendations based on your location, season, soil & water.",
+      text: "Hello 👨‍🌾! I'm your AgriConnect Intelligent Multi-Agent Assistant.\n\nI coordinate **4 specialized MCP agents**:\n🌾 **Farming Agent** — 7-Day Weather Forecasts, Govt Schemes, Technologies, APMC Mandi Rates & Crop Advisories\n🛒 **Marketplace Agent** — Browse live listings, check stock & reviews\n📍 **Logistics Agent** — 50 km local farmer discovery & PostGIS delivery checks\n📦 **Order & Support Agent** — Cart & order tracking\n\nHow can our agent network help you today?",
     },
   ]);
 
-  // Chat mode state
+  // Chat/agent mode input
   const [question, setQuestion] = useState("");
 
   // Crop suggestion mode state
@@ -40,12 +77,20 @@ const AIAssistant = () => {
   const handleModeSwitch = (newMode) => {
     if (newMode === mode) return;
     setMode(newMode);
-    if (newMode === MODES.CROP) {
+    if (newMode === MODES.AGENT) {
       setMessages((prev) => [
         ...prev,
         {
           role: "ai",
-          text: "🌾 Crop Suggestion Mode activated!\n\nFill in the form below with your farm details and I'll recommend the best crops for you.",
+          text: "🧠 **Multi-Agent Orchestrator** active!\n\nI can coordinate Farming, Marketplace, Logistics, and Order Support MCP agents to query real-time database tools and solve multi-step requests.",
+        },
+      ]);
+    } else if (newMode === MODES.CROP) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          text: "🌾 **Crop Suggestion Mode** activated!\n\nFill in the form below with your farm details and I'll recommend the best crops for you.",
         },
       ]);
     } else {
@@ -53,13 +98,13 @@ const AIAssistant = () => {
         ...prev,
         {
           role: "ai",
-          text: "💬 General Chat Mode activated!\n\nAsk me anything about farming — diseases, fertilizers, irrigation, market tips, and more.",
+          text: "💬 **Quick Chat Mode** activated!\n\nAsk me anything about farming — diseases, fertilizers, irrigation, and general advice.",
         },
       ]);
     }
   };
 
-  /* ── General chat send ── */
+  /* ── Send question (supports both quick chat and orchestrator) ── */
   const sendQuestion = async () => {
     if (!question.trim() || loading) return;
 
@@ -69,16 +114,48 @@ const AIAssistant = () => {
     setLoading(true);
 
     try {
-      const res = await axios.post(
-        "/api/ai/assistant",
-        { question: userMsg.text },
-        { withCredentials: true }
-      );
-      setMessages((prev) => [...prev, { role: "ai", text: res.data.answer }]);
-    } catch {
+      if (mode === MODES.AGENT) {
+        // Query the Multi-Agent Orchestrator endpoint with user location context
+        const storedUser = JSON.parse(localStorage.getItem('agriconnect_user') || '{}');
+        const res = await axios.post(
+          "/api/ai/orchestrator",
+          {
+            query: userMsg.text,
+            context: {
+              location: storedUser.district || storedUser.state || undefined,
+              coordinates: storedUser.location?.coordinates || undefined,
+              role: storedUser.role || undefined,
+            },
+          },
+          { withCredentials: true }
+        );
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "ai",
+            text: res.data.synthesizedResponse || res.data.answer || "Query processed successfully.",
+            plan: res.data.plan,
+            executionSteps: res.data.executionSteps,
+          },
+        ]);
+      } else {
+        // Quick Gemini chat endpoint
+        const res = await axios.post(
+          "/api/ai/assistant",
+          { question: userMsg.text },
+          { withCredentials: true }
+        );
+        setMessages((prev) => [...prev, { role: "ai", text: res.data.answer }]);
+      }
+    } catch (err) {
+      console.error("AI Assistant query failed:", err);
       setMessages((prev) => [
         ...prev,
-        { role: "ai", text: "Sorry, I'm unable to respond right now. Please try again." },
+        {
+          role: "ai",
+          text: "Sorry, I'm unable to complete that request right now. Please try again or rephrase your query.",
+        },
       ]);
     } finally {
       setLoading(false);
@@ -92,7 +169,6 @@ const AIAssistant = () => {
 
     const { location, season, soil_type, availability, question: q } = cropForm;
 
-    // Show user's form details as a chat message
     const summaryText =
       `📍 Location: ${location}\n` +
       `🌤 Season: ${season}\n` +
@@ -128,39 +204,58 @@ const AIAssistant = () => {
     }
   };
 
-  const chatSuggestions = [
+  const agentSuggestions = [
+    "Give me the 7-day weather forecast and spraying advice",
+    "Find fresh wheat or rice products within 50km",
+    "Active government schemes for drip irrigation",
+    "What are today's mandi market prices for tomato in Maharashtra?",
+  ];
+
+  const quickChatSuggestions = [
+    "What is the weather report for the next 7 days?",
     "Best fertilizer for wheat?",
     "How to treat tomato blight?",
-    "When to sow paddy?",
     "Tips for drip irrigation?",
   ];
+
+  const currentSuggestions = mode === MODES.AGENT ? agentSuggestions : quickChatSuggestions;
 
   return (
     <div className="ai-assistant-wrapper">
       {/* ── Header ── */}
       <div className="ai-assistant-header">
-        <div className="ai-header-icon">🤖</div>
+        <div className="ai-header-icon">
+          {mode === MODES.AGENT ? "🧠" : mode === MODES.CROP ? "🌾" : "🤖"}
+        </div>
         <div>
           <h2 className="db-section-title" style={{ margin: 0, fontSize: "1.4rem" }}>
-            🌱 AI Farming Assistant
+            {mode === MODES.AGENT ? "🧠 Multi-Agent AgriAssistant" : "🌱 AI Farming Assistant"}
           </h2>
           <p style={{ fontSize: "0.8rem", color: "var(--color-text-muted)", marginTop: "2px" }}>
-            Powered by Gemini AI · Two modes: chat &amp; crop suggestion
+            {mode === MODES.AGENT
+              ? "4 MCP Agents: Farming, Marketplace, PostGIS Logistics & Orders"
+              : "Powered by Gemini AI · Fast responses & crop suggestions"}
           </p>
         </div>
         <div className="ai-status-dot">
           <span className="ai-status-indicator"></span>
-          Online
+          MCP Connected
         </div>
       </div>
 
       {/* ── Mode Toggle ── */}
       <div className="ai-mode-toggle">
         <button
+          className={`ai-mode-btn ${mode === MODES.AGENT ? "active" : ""}`}
+          onClick={() => handleModeSwitch(MODES.AGENT)}
+        >
+          🧠 Multi-Agent (MCP)
+        </button>
+        <button
           className={`ai-mode-btn ${mode === MODES.CHAT ? "active" : ""}`}
           onClick={() => handleModeSwitch(MODES.CHAT)}
         >
-          💬 Ask AI
+          💬 Quick Ask AI
         </button>
         <button
           className={`ai-mode-btn ${mode === MODES.CROP ? "active" : ""}`}
@@ -170,12 +265,12 @@ const AIAssistant = () => {
         </button>
       </div>
 
-      {/* ── Chat suggestions (chat mode, initial state) ── */}
-      {mode === MODES.CHAT && messages.length <= 2 && (
+      {/* ── Suggestions ── */}
+      {mode !== MODES.CROP && messages.length <= 2 && (
         <div className="ai-suggestions">
           <p className="ai-suggestions-label">Try asking:</p>
           <div className="ai-suggestions-grid">
-            {chatSuggestions.map((q, i) => (
+            {currentSuggestions.map((q, i) => (
               <button
                 key={i}
                 className="ai-suggestion-chip"
@@ -195,9 +290,27 @@ const AIAssistant = () => {
             key={index}
             className={`ai-message-row ${msg.role === "user" ? "ai-message-user" : "ai-message-ai"}`}
           >
-            {msg.role === "ai" && <div className="ai-avatar">🤖</div>}
+            {msg.role === "ai" && (
+              <div className="ai-avatar">
+                {msg.executionSteps && msg.executionSteps.length > 0 ? "🧠" : "🤖"}
+              </div>
+            )}
             <div className={`ai-bubble ${msg.role === "user" ? "ai-bubble-user" : "ai-bubble-ai"}`}>
               {msg.text}
+
+              {/* Badges for agents consulted */}
+              {msg.executionSteps && msg.executionSteps.length > 0 && (
+                <>
+                  <div className="ai-agent-badges">
+                    {Array.from(new Set(msg.executionSteps.map((s) => s.agent))).map((agentName, idx) => (
+                      <span key={idx} className="ai-agent-pill">
+                        ⚡ {agentName}
+                      </span>
+                    ))}
+                  </div>
+                  <AgentStepsDropdown steps={msg.executionSteps} />
+                </>
+              )}
             </div>
             {msg.role === "user" && <div className="ai-avatar ai-avatar-user">👨‍🌾</div>}
           </div>
@@ -205,11 +318,14 @@ const AIAssistant = () => {
 
         {loading && (
           <div className="ai-message-row ai-message-ai">
-            <div className="ai-avatar">🤖</div>
+            <div className="ai-avatar">{mode === MODES.AGENT ? "🧠" : "🤖"}</div>
             <div className="ai-bubble ai-bubble-ai ai-thinking">
               <span className="ai-dot"></span>
               <span className="ai-dot"></span>
               <span className="ai-dot"></span>
+              <span style={{ fontSize: "0.78rem", color: "var(--color-text-muted)", marginLeft: "8px" }}>
+                {mode === MODES.AGENT ? "Agents coordinating tools..." : "Thinking..."}
+              </span>
             </div>
           </div>
         )}
@@ -217,15 +333,19 @@ const AIAssistant = () => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* ── Input area: chat mode ── */}
-      {mode === MODES.CHAT && (
+      {/* ── Input area: agent / chat mode ── */}
+      {mode !== MODES.CROP && (
         <div className="ai-input-area">
           <input
             type="text"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about crops, diseases, fertilizers..."
+            placeholder={
+              mode === MODES.AGENT
+                ? "Ask about 7-day weather, farming, marketplace, 50km logistics, or orders..."
+                : "Ask about 7-day weather, crops, diseases, fertilizers..."
+            }
             className="ai-input"
             disabled={loading}
           />

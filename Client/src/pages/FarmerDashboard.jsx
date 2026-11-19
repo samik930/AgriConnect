@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './FarmerDashboard.css';
 import AIAssistant from '../components/AIAssistant';
+import UpdateLocationButton from '../components/UpdateLocationButton';
 
 /* ─── Helper: authenticated fetch ─────────────────────────── */
 const authFetch = (url, options = {}) => {
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const defaultHeaders = isFormData ? {} : { 'Content-Type': 'application/json' };
   return fetch(url, {
     ...options,
     credentials: 'include',
     headers: {
-      'Content-Type': 'application/json',
+      ...defaultHeaders,
       ...(options.headers || {}),
     },
   });
@@ -28,7 +31,7 @@ const weatherIcon = (code) => {
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /* ─── Empty product form ───────────────────────────────────── */
-const EMPTY_PRODUCT = { name: '', category: '', description: '', price: '', stock: '', unit: 'kg' };
+const EMPTY_PRODUCT = { name: '', category: '', description: '', price: '', stock: '', unit: 'kg', imageUrl: '' };
 
 /* ═══════════════════════════════════════════════════════════ */
 const FarmerDashboard = ({ onLogout, onLogoClick }) => {
@@ -58,6 +61,8 @@ const FarmerDashboard = ({ onLogout, onLogoClick }) => {
   const [editingProduct, setEditingProduct] = useState(null);
   const [productForm, setProductForm] = useState(EMPTY_PRODUCT);
   const [productSubmitting, setProductSubmitting] = useState(false);
+  const [selectedImageFile, setSelectedImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
 
   /* profile */
   const [profileData, setProfileData] = useState({
@@ -67,6 +72,39 @@ const FarmerDashboard = ({ onLogout, onLogoClick }) => {
   /* orders */
   const [orders, setOrders] = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
+
+  /* official admin-managed trainings & market prices */
+  const [trainings, setTrainings] = useState([]);
+  const [trainingsLoading, setTrainingsLoading] = useState(false);
+  const [marketPrices, setMarketPrices] = useState([]);
+  const [marketPricesLoading, setMarketPricesLoading] = useState(false);
+  const [cropFilter, setCropFilter] = useState('');
+
+  /* ── Fetch: Trainings (Official Admin Authored) ─── */
+  const fetchTrainings = useCallback(async () => {
+    setTrainingsLoading(true);
+    try {
+      const res = await fetch('/api/trainings');
+      if (res.ok) {
+        const data = await res.json();
+        setTrainings(Array.isArray(data.trainings) ? data.trainings : []);
+      }
+    } catch { /* silent */ }
+    finally { setTrainingsLoading(false); }
+  }, []);
+
+  /* ── Fetch: APMC Market Prices (Official Benchmark Authored by Admin) ─── */
+  const fetchMarketPrices = useCallback(async () => {
+    setMarketPricesLoading(true);
+    try {
+      const res = await fetch('/api/market-prices');
+      if (res.ok) {
+        const data = await res.json();
+        setMarketPrices(Array.isArray(data.marketPrices) ? data.marketPrices : []);
+      }
+    } catch { /* silent */ }
+    finally { setMarketPricesLoading(false); }
+  }, []);
 
   /* ── Fetch: My Products ─── */
   const fetchProducts = useCallback(async () => {
@@ -205,17 +243,24 @@ useEffect(() => {
 
   useEffect(() => {
     if (activeTab === 'weather') fetchWeather();
-  }, [activeTab, fetchWeather]);
+    if (activeTab === 'trainings') fetchTrainings();
+    if (activeTab === 'market-prices') fetchMarketPrices();
+  }, [activeTab, fetchWeather, fetchTrainings, fetchMarketPrices]);
 
   /* ── Product CRUD handlers ─── */
   const openAddModal = () => {
     setEditingProduct(null);
+    setSelectedImageFile(null);
+    setImagePreview('');
     setProductForm(EMPTY_PRODUCT);
     setShowProductModal(true);
   };
 
   const openEditModal = (product) => {
     setEditingProduct(product);
+    setSelectedImageFile(null);
+    const existingImg = product.image || product.imageUrl || '';
+    setImagePreview(existingImg);
     setProductForm({
       name: product.name,
       category: product.category,
@@ -223,6 +268,7 @@ useEffect(() => {
       price: product.price,
       stock: product.stock,
       unit: product.unit || 'kg',
+      imageUrl: existingImg,
     });
     setShowProductModal(true);
   };
@@ -231,19 +277,69 @@ useEffect(() => {
     setProductForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
+  const handleImageSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('Please select a valid image file (PNG, JPG, WEBP).');
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      alert('Image file size must be less than 8MB.');
+      return;
+    }
+    setSelectedImageFile(file);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImagePreview(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveImage = () => {
+    setSelectedImageFile(null);
+    setImagePreview('');
+    setProductForm(prev => ({ ...prev, imageUrl: '' }));
+  };
+
   const handleProductSubmit = async (e) => {
     e.preventDefault();
     setProductSubmitting(true);
     try {
-      const url = editingProduct ? `/api/products/${editingProduct._id}` : '/api/products';
+      const prodId = editingProduct?._id || editingProduct?.id;
+      const url = editingProduct ? `/api/products/${prodId}` : '/api/products';
       const method = editingProduct ? 'PUT' : 'POST';
-      const res = await authFetch(url, { method, body: JSON.stringify(productForm) });
+
+      let body;
+      if (selectedImageFile) {
+        const formData = new FormData();
+        formData.append('name', productForm.name);
+        formData.append('category', productForm.category);
+        formData.append('description', productForm.description || '');
+        formData.append('price', productForm.price);
+        formData.append('stock', productForm.stock);
+        formData.append('unit', productForm.unit || 'kg');
+        formData.append('image', selectedImageFile);
+        body = formData;
+      } else {
+        body = JSON.stringify(productForm);
+      }
+
+      const res = await authFetch(url, { method, body });
       if (res.ok) {
         setShowProductModal(false);
+        setSelectedImageFile(null);
+        setImagePreview('');
         fetchProducts();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert('Failed to save product: ' + (err.message || 'Server error'));
       }
-    } catch { /* silent */ }
-    finally { setProductSubmitting(false); }
+    } catch (err) {
+      alert('Error saving product: ' + err.message);
+    } finally {
+      setProductSubmitting(false);
+    }
   };
 
   const handleDeleteProduct = async (id) => {
@@ -278,6 +374,8 @@ useEffect(() => {
     { id: 'orders',        label: 'Orders Received',  icon: '📦' },
     { id: 'schemes',       label: 'Govt. Schemes',    icon: '🏛' },
     { id: 'technologies',  label: 'Technologies',     icon: '🚜' },
+    { id: 'trainings',     label: 'Trainings & KVK',  icon: '🎓' },
+    { id: 'market-prices', label: 'Mandi Rates',      icon: '📈' },
     { id: 'weather',       label: 'Weather',          icon: '🌦' },
     { id: 'ai-assistant',  label: 'AI Assistant',     icon: '🤖' },
     { id: 'profile',       label: 'Profile',          icon: '👤' },
@@ -346,7 +444,12 @@ useEffect(() => {
         ) : (
           <div className="products-grid">
             {displayProducts.map(p => (
-              <div className="product-card" key={p._id}>
+              <div className="product-card" key={p._id || p.id}>
+                {(p.image || p.imageUrl) && (
+                  <div className="product-card-image-wrap">
+                    <img src={p.image || p.imageUrl} alt={p.name} className="product-card-image" />
+                  </div>
+                )}
                 <span className="product-badge">{p.category}</span>
                 <div className="product-name">{p.name}</div>
                 <div className="product-price">₹{p.price}/{p.unit || 'kg'}</div>
@@ -357,7 +460,7 @@ useEffect(() => {
                 {!compact && (
                   <div className="product-actions">
                     <button className="btn-sm btn-edit" onClick={() => openEditModal(p)}>✏ Edit</button>
-                    <button className="btn-sm btn-delete" onClick={() => handleDeleteProduct(p._id)}>🗑 Delete</button>
+                    <button className="btn-sm btn-delete" onClick={() => handleDeleteProduct(p._id || p.id)}>🗑 Delete</button>
                   </div>
                 )}
               </div>
@@ -437,6 +540,100 @@ useEffect(() => {
     </>
   );
 
+  const renderTrainings = () => (
+    <>
+      <h2 className="db-section-title">🎓 Agricultural Trainings & KVK Workshops</h2>
+      {trainingsLoading ? (
+        <div className="loading-state"><span className="geo-spinner"></span> Loading workshops...</div>
+      ) : trainings.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-state-icon">🎓</div>
+          <p>No training workshops listed at the moment.</p>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' }}>
+          {trainings.map(t => (
+            <div key={t._id || t.id} style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', borderRadius: '12px', padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+              <div>
+                <span style={{ fontSize: '0.72rem', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--color-primary)', padding: '4px 8px', borderRadius: '12px', fontWeight: 600 }}>
+                  🏛 {t.organizer}
+                </span>
+                <h4 style={{ margin: '12px 0 8px 0', fontSize: '1.05rem', fontWeight: 700 }}>{t.title}</h4>
+                <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '6px' }}>
+                  📅 {new Date(t.date).toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} at {new Date(t.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
+                  📍 {t.location || 'Online Session'}
+                </div>
+              </div>
+              {t.registrationLink && (
+                <a
+                  href={t.registrationLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ marginTop: '16px', display: 'inline-block', textAlign: 'center', padding: '9px 16px', background: 'var(--color-primary)', color: '#fff', borderRadius: '8px', textDecoration: 'none', fontWeight: 600, fontSize: '0.85rem' }}
+                >
+                  Register Now ↗
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+
+  const renderMarketPrices = () => {
+    const search = cropFilter.toLowerCase().trim();
+    const filtered = marketPrices.filter(mp => 
+      !search || (mp.cropName || '').toLowerCase().includes(search) || (mp.district || '').toLowerCase().includes(search)
+    );
+
+    return (
+      <>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
+          <h2 className="db-section-title" style={{ margin: 0 }}>📈 APMC Daily Mandi Benchmark Prices</h2>
+          <input
+            type="text"
+            placeholder="🔍 Filter by crop or mandi (e.g. Tomato, Pune)..."
+            value={cropFilter}
+            onChange={e => setCropFilter(e.target.value)}
+            style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--color-border)', background: 'var(--color-bg-secondary)', color: 'var(--color-text)', fontSize: '0.85rem', minWidth: '260px' }}
+          />
+        </div>
+
+        {marketPricesLoading ? (
+          <div className="loading-state"><span className="geo-spinner"></span> Loading mandi rates...</div>
+        ) : filtered.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-state-icon">📈</div>
+            <p>No benchmark prices found matching your filter.</p>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '16px' }}>
+            {filtered.map(mp => (
+              <div key={mp._id || mp.id} style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', borderRadius: '12px', padding: '18px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <h4 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700 }}>🌾 {mp.cropName}</h4>
+                  <span style={{ fontSize: '0.75rem', background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6', padding: '3px 8px', borderRadius: '12px', fontWeight: 600 }}>
+                    📍 {mp.district}
+                  </span>
+                </div>
+                <div style={{ margin: '14px 0 6px 0', fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-primary)', fontFamily: 'var(--font-display)' }}>
+                  ₹{parseFloat(mp.marketPrice || 0).toFixed(2)}
+                  <span style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginLeft: '4px' }}>/{mp.unit || 'kg'}</span>
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>
+                  Updated: {new Date(mp.updatedAt || Date.now()).toLocaleDateString('en-IN')}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  };
+
   const renderWeather = () => (
     <>
       <h2 className="db-section-title">🌦 Weather Forecast</h2>
@@ -515,34 +712,49 @@ useEffect(() => {
         </div>
       ) : (
         <div className="orders-list" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          {orders.map(order => (
-            <div className="order-card" key={order._id} style={{ background: 'var(--color-bg-secondary)', padding: '20px', borderRadius: '12px', border: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h4 style={{ margin: '0 0 5px 0', fontSize: '1.1rem' }}>
-                  {order.items?.filter(i => i.farmer === user._id).map(i => i.product?.name || 'Item').join(', ') || 'Product'}
-                </h4>
-                <p style={{ margin: 0, color: 'var(--color-text-muted)' }}>Customer: {order.customer?.name} ({order.customer?.email})</p>
-                <p style={{ margin: '5px 0 0 0', fontSize: '0.85rem', color: '#666' }}>Order Date: {new Date(order.createdAt).toLocaleDateString()}</p>
-                <p style={{ margin: '5px 0 0 0', fontSize: '0.85rem', color: '#666' }}>Delivery Address: {order.deliveryAddress || 'N/A'}</p>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
-                <div style={{ background: 'rgba(16,185,129,0.1)', color: 'var(--color-primary)', padding: '6px 12px', borderRadius: '20px', fontWeight: 600, fontSize: '0.9rem' }}>
-                  {order.orderStatus || 'Pending'}
+          {orders.map(order => {
+            const farmerId = user._id || user.id;
+            const myItems = (order.items || []).filter(item => {
+              const itemFarmerId = typeof item.farmer === 'object' ? (item.farmer?._id || item.farmer?.id) : item.farmer;
+              return !itemFarmerId || itemFarmerId === farmerId;
+            });
+            const displayItems = myItems.length > 0 ? myItems : (order.items || []);
+            const productNames = displayItems
+              .map(item => `${item.product?.name || item.product || 'Produce'}${item.quantity ? ` (${item.quantity} ${item.product?.unit || 'unit'})` : ''}`)
+              .join(', ');
+
+            return (
+              <div className="order-card" key={order._id} style={{ background: 'var(--color-bg-secondary)', padding: '20px', borderRadius: '12px', border: '1px solid var(--color-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h4 style={{ margin: '0 0 5px 0', fontSize: '1.1rem' }}>
+                    {productNames || 'Produce'}
+                  </h4>
+                  <p style={{ margin: 0, color: 'var(--color-text-muted)' }}>Customer: {order.customer?.name} ({order.customer?.email})</p>
+                  <p style={{ margin: '5px 0 0 0', fontSize: '0.85rem', color: '#666' }}>Order Date: {new Date(order.createdAt).toLocaleDateString()}</p>
+                  <p style={{ margin: '5px 0 0 0', fontSize: '0.85rem', color: '#666' }}>Delivery Address: {order.deliveryAddress || 'N/A'}</p>
                 </div>
-                <select 
-                  style={{ padding: '6px 10px', borderRadius: '6px', background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text)', cursor: 'pointer' }}
-                  value={order.orderStatus}
-                  onChange={(e) => handleUpdateOrderStatus(order._id, e.target.value)}
-                >
-                  <option value="Pending">Pending</option>
-                  <option value="Accepted">Accepted</option>
-                  <option value="Packed">Packed</option>
-                  <option value="Delivered">Delivered</option>
-                  <option value="Cancelled">Cancelled</option>
-                </select>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+                  <div style={{ background: 'rgba(16,185,129,0.1)', color: 'var(--color-primary)', padding: '6px 12px', borderRadius: '20px', fontWeight: 600, fontSize: '0.9rem' }}>
+                    {order.orderStatus || 'Pending'}
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: order.paymentStatus === 'Paid' ? '#10b981' : '#f59e0b', fontWeight: 600 }}>
+                    {order.paymentStatus === 'Paid' ? '💳 Paid via Razorpay' : '⏳ Payment Pending'}
+                  </div>
+                  <select 
+                    style={{ padding: '6px 10px', borderRadius: '6px', background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text)', cursor: 'pointer' }}
+                    value={order.orderStatus}
+                    onChange={(e) => handleUpdateOrderStatus(order._id, e.target.value)}
+                  >
+                    <option value="Pending">Pending</option>
+                    <option value="Accepted">Accepted</option>
+                    <option value="Packed">Packed</option>
+                    <option value="Delivered">Delivered</option>
+                    <option value="Cancelled">Cancelled</option>
+                  </select>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </>
@@ -578,6 +790,25 @@ useEffect(() => {
         <button className="btn-primary" style={{ padding: '12px 32px', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700, background: 'var(--color-primary)', color: '#fff' }}>
           Update Profile
         </button>
+        <div style={{ marginTop: '12px' }}>
+          <UpdateLocationButton onUpdated={(updated) => {
+            const stored = JSON.parse(localStorage.getItem('agriconnect_user') || '{}');
+            setProfileData(prev => ({
+              ...prev,
+              state:    updated.state    || prev.state,
+              district: updated.district || prev.district,
+              address:  updated.address  || prev.address,
+            }));
+          }} />
+          {user.location?.coordinates?.length === 2
+            ? <p style={{ fontSize: '0.78rem', color: '#86efac', marginTop: 4 }}>
+                📌 Coordinates saved: [{user.location.coordinates[1].toFixed(4)}, {user.location.coordinates[0].toFixed(4)}]
+              </p>
+            : <p style={{ fontSize: '0.78rem', color: '#fca5a5', marginTop: 4 }}>
+                ⚠ No location saved yet — click above to set it.
+              </p>
+          }
+        </div>
       </div>
     </>
   );
@@ -589,6 +820,8 @@ useEffect(() => {
       case 'orders':        return renderOrders();
       case 'schemes':       return renderSchemes();
       case 'technologies':  return renderTechnologies();
+      case 'trainings':     return renderTrainings();
+      case 'market-prices': return renderMarketPrices();
       case 'weather':       return renderWeather();
       case 'ai-assistant':  return <AIAssistant />;
       case 'profile':       return renderProfile();
@@ -677,6 +910,29 @@ useEffect(() => {
               <div className="db-form-group">
                 <label>Description</label>
                 <input name="description" value={productForm.description} onChange={handleProductFormChange} placeholder="Briefly describe your product" />
+              </div>
+              <div className="db-form-group">
+                <label>Product Image (via Cloudinary)</label>
+                {imagePreview ? (
+                  <div className="image-preview-box">
+                    <img src={imagePreview} alt="Product Preview" className="image-preview-thumb" />
+                    <button type="button" className="btn-remove-image" onClick={handleRemoveImage}>
+                      ✕ Remove Image
+                    </button>
+                  </div>
+                ) : (
+                  <label className="image-upload-zone">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageSelect}
+                      style={{ display: 'none' }}
+                    />
+                    <span style={{ fontSize: '1.6rem' }}>📷</span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Click to select product image</span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>PNG, JPG, WEBP (Max 8MB)</span>
+                  </label>
+                )}
               </div>
               <div className="db-form-row">
                 <div className="db-form-group">

@@ -1,7 +1,7 @@
 import React from 'react';
 import './Hero.css';
 
-const Hero = () => {
+const Hero = ({ onFarmerLoginClick, onCustomerLoginClick, isLoggedIn, user, onDashboardClick }) => {
   return (
     <section className="hero" id="home">
       <div className="hero-background">
@@ -23,8 +23,20 @@ const Hero = () => {
             AgriConnect bridges the gap between traditional farming and modern innovation. Optimize your yield, connect with markets, and grow sustainably.
           </p>
           <div className="hero-actions">
-            <button className="btn-primary btn-lg">Get Started</button>
-            <button className="btn-secondary btn-lg">Watch Demo</button>
+            {isLoggedIn ? (
+              <button className="btn-primary btn-lg" onClick={onDashboardClick}>
+                Go to {user?.role === 'farmer' ? 'Farmer' : user?.role === 'customer' ? 'Customer' : 'Admin'} Dashboard →
+              </button>
+            ) : (
+              <>
+                <button className="btn-primary btn-lg" onClick={onFarmerLoginClick}>
+                  🌾 Farmer Portal
+                </button>
+                <button className="btn-secondary btn-lg btn-customer-hero" onClick={onCustomerLoginClick}>
+                  🛒 Customer Market
+                </button>
+              </>
+            )}
           </div>
           
           <div className="stats-row">

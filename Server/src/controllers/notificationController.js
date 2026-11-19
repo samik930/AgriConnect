@@ -1,35 +1,38 @@
-import Scheme from "../models/Scheme.js";
-import Technology from "../models/Technology.js";
-import User from "../models/User.js";
+import { query } from "../db/index.js";
+import { formatScheme, formatTechnology } from "../utils/formatters.js";
 
-export const Notifyfarmers = async(req,res) => {
-    try {
-        const farmer = await User.findById(req.user._id);
-        if(!farmer) {
-            return res.status(400).json({
-                success : true,
-                message : "Farmer not found",
-            })
-        }
-        const schemes = await Scheme.find({
-            state : farmer.state,
-        })
+export const Notifyfarmers = async (req, res) => {
+  try {
+    const farmerId = req.user._id || req.user.id;
 
-        const technologies = await Technology.find({
-            state : farmer.state,
-        })
-
-        return res.status(201).json({
-            farmer : farmer.name,
-            schemes,
-            technologies,
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    const farmerRes = await query("SELECT id, name, state FROM users WHERE id = $1", [farmerId]);
+    if (farmerRes.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Farmer not found",
+      });
     }
-}
 
+    const farmer = farmerRes.rows[0];
 
+    const schemesRes = await query(
+      "SELECT * FROM schemes WHERE state = $1 OR state = 'All' ORDER BY created_at DESC",
+      [farmer.state]
+    );
 
+    const techRes = await query(
+      "SELECT * FROM technologies WHERE state = $1 OR state = 'All' ORDER BY created_at DESC",
+      [farmer.state]
+    );
+
+    return res.status(200).json({
+      farmer: farmer.name,
+      schemes: schemesRes.rows.map(formatScheme),
+      technologies: techRes.rows.map(formatTechnology),
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};

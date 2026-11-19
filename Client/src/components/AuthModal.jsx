@@ -1,12 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import './AuthModal.css';
 
-const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
-  const [mode, setMode] = useState(initialMode); // 'login', 'signup', 'forgotPassword'
+// Safe fetch: throws a friendly error if server is unreachable or returns non-JSON
+const safeFetch = async (url, options) => {
+  let res;
+  try {
+    res = await fetch(url, options);
+  } catch {
+    throw new Error('Cannot connect to server. Make sure the backend is running on port 5000.');
+  }
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error('Server is not responding correctly. Make sure the backend is running on port 5000.');
+  }
+  return { res, data };
+};
+
+const AuthModal = ({ isOpen, onClose, initialMode = 'login', initialRole = 'farmer', onSuccess }) => {
+  const [mode, setMode] = useState(initialMode); // 'login', 'signup', 'forgotPassword', 'adminLogin'
+  const [role, setRole] = useState(initialRole || 'farmer'); // 'farmer' | 'customer'
   const [geoStatus, setGeoStatus] = useState('idle'); // 'idle' | 'loading' | 'success' | 'error'
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [apiError, setApiError] = useState('');
   const [apiSuccess, setApiSuccess] = useState('');
+  const [adminRedirectPrompt, setAdminRedirectPrompt] = useState(false);
   
   const [otpSent, setOtpSent] = useState(false);
   const [forgotPasswordStep, setForgotPasswordStep] = useState(1); // 1 = email, 2 = otp + new password
@@ -17,7 +37,7 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
     email: '',
     phone: '',
     password: '',
-    role: 'farmer',
+    role: initialRole || 'farmer',
     state: '',
     address: '',
     district: '',
@@ -27,11 +47,62 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
     location: { type: 'Point', coordinates: [] } // [longitude, latitude]
   });
 
+  // Defined with useCallback so it can be safely called from useEffect
+  const handleDetectLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setGeoStatus('error');
+      return;
+    }
+    setGeoStatus('loading');
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { longitude, latitude } = position.coords;
+        try {
+          const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
+            { headers: { 'Accept-Language': 'en' } }
+          );
+          const data = await res.json();
+          const addr = data.address || {};
+          const state    = addr.state        || addr.region         || '';
+          const district = addr.county       || addr.state_district || addr.city_district || addr.district || addr.city || '';
+          const road     = addr.road         || addr.neighbourhood  || addr.suburb || '';
+          const city     = addr.city         || addr.town           || addr.village || '';
+          const address  = [road, city].filter(Boolean).join(', ');
+          const pincode  = addr.postcode     || '';
+          setFormData((prev) => ({
+            ...prev,
+            location: { type: 'Point', coordinates: [longitude, latitude] },
+            state,
+            district,
+            address,
+            pincode,
+          }));
+        } catch {
+          setFormData((prev) => ({
+            ...prev,
+            location: { type: 'Point', coordinates: [longitude, latitude] },
+          }));
+        }
+        setGeoStatus('success');
+      },
+      () => setGeoStatus('error')
+    );
+  }, []);
+
+  // Auto-trigger location detection when signup form opens
+  useEffect(() => {
+    if (isOpen && mode === 'signup' && geoStatus === 'idle') {
+      handleDetectLocation();
+    }
+  }, [isOpen, mode, geoStatus, handleDetectLocation]);
+
   if (!isOpen) return null;
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
     setApiError('');
+    setAdminRedirectPrompt(false);
   };
 
   const handleSubmit = async (e) => {
@@ -43,12 +114,11 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
     try {
       if (mode === 'signup' && !otpSent) {
         // Step 1 of Signup: Send OTP
-        const res = await fetch('/api/auth/send-otp', {
+        const { res, data } = await safeFetch('/api/auth/send-otp', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: formData.email, phone: formData.phone }),
         });
-        const data = await res.json();
         if (!res.ok) throw new Error(data.message || 'Failed to send OTP.');
         setOtpSent(true);
         setApiSuccess('OTP sent to your email! Please check your inbox.');
@@ -59,12 +129,11 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
       if (mode === 'forgotPassword') {
         if (forgotPasswordStep === 1) {
           // Send forgot password OTP
-          const res = await fetch('/api/auth/forgot-password', {
+          const { res, data } = await safeFetch('/api/auth/forgot-password', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: formData.email }),
           });
-          const data = await res.json();
           if (!res.ok) throw new Error(data.message || 'Failed to send OTP.');
           setForgotPasswordStep(2);
           setApiSuccess('OTP sent to your email! Please check your inbox.');
@@ -72,12 +141,11 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
           return;
         } else {
           // Verify forgot password OTP and reset password
-          const res = await fetch('/api/auth/reset-password', {
+          const { res, data } = await safeFetch('/api/auth/reset-password', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: formData.email, otp: formData.otp, newPassword: formData.newPassword }),
           });
-          const data = await res.json();
           if (!res.ok) throw new Error(data.message || 'Failed to reset password.');
           setApiSuccess('Password reset successfully! You can now log in.');
           setMode('login');
@@ -88,9 +156,10 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
       }
 
       // Login or Complete Registration
-      const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
+      const isLogin = mode === 'login' || mode === 'adminLogin';
+      const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
 
-      const payload = mode === 'login'
+      const payload = isLogin
         ? { email: formData.email, password: formData.password }
         : {
             ...formData,
@@ -98,16 +167,31 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
             location: formData.location.coordinates.length === 2 ? formData.location : undefined,
           };
 
-      const res = await fetch(endpoint, {
+      const { res, data } = await safeFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
-
       if (!res.ok) {
         throw new Error(data.message || 'Something went wrong. Please try again.');
+      }
+
+      if (mode === 'adminLogin' && data.role !== 'admin') {
+        throw new Error(`Access denied: This portal is strictly for administrators. Your account is registered as a "${data.role}". Please use ${data.role === 'farmer' ? 'Farmer' : 'Customer'} Login.`);
+      }
+
+      if (mode === 'login') {
+        if (data.role === 'admin') {
+          setAdminRedirectPrompt(true);
+          throw new Error('Your account has Administrator privileges. Please switch to the Admin Dashboard login.');
+        }
+        if (role === 'farmer' && data.role !== 'farmer') {
+          throw new Error('This portal is for Farmers. Your account is registered as a "Customer". Please switch to Customer Login.');
+        }
+        if (role === 'customer' && data.role !== 'customer') {
+          throw new Error('This portal is for Customers. Your account is registered as a "Farmer". Please switch to Farmer Login.');
+        }
       }
 
       // Save token to localStorage
@@ -125,79 +209,40 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
         location: data.location
       }));
 
+      const userName = data.name || 'there';
       setApiSuccess(
         mode === 'login'
-          ? `Welcome back, ${data.name}! 👋`
-          : `Account created successfully! Welcome, ${data.name}! 🎉`
+          ? `Welcome back, ${userName}! 👋`
+          : `Account created successfully! Welcome, ${userName}! 🎉`
       );
 
       // Notify parent and close modal
-      setTimeout(() => {
-        if (onSuccess) onSuccess();
-        else onClose();
-      }, 1200);
+      if (onSuccess) onSuccess();
+      else onClose();
 
     } catch (err) {
-      setApiError(err.message);
+      // Handle HTML response from proxy (server not running)
+      if (err.message && err.message.includes('<!DOCTYPE')) {
+        setApiError('Cannot connect to server. Please make sure the backend is running.');
+      } else {
+        setApiError(err.message || 'Something went wrong. Please try again.');
+      }
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const switchMode = (newMode) => {
+  const switchMode = (newMode, newRole) => {
     setMode(newMode);
+    if (newRole) {
+      setRole(newRole);
+      setFormData((prev) => ({ ...prev, role: newRole }));
+    }
     setApiError('');
     setApiSuccess('');
+    setAdminRedirectPrompt(false);
     setOtpSent(false);
     setForgotPasswordStep(1);
-  };
-
-  const handleDetectLocation = () => {
-    if (!navigator.geolocation) {
-      setGeoStatus('error');
-      return;
-    }
-    setGeoStatus('loading');
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const { longitude, latitude } = position.coords;
-
-        try {
-          const res = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
-            { headers: { 'Accept-Language': 'en' } }
-          );
-          const data = await res.json();
-          const addr = data.address || {};
-
-          const state    = addr.state        || addr.region         || '';
-          const district = addr.county       || addr.state_district || addr.city_district || addr.district || addr.city || '';
-          const road     = addr.road         || addr.neighbourhood  || addr.suburb || '';
-          const city     = addr.city         || addr.town           || addr.village || '';
-          const address  = [road, city].filter(Boolean).join(', ');
-          const pincode  = addr.postcode     || '';
-
-          setFormData((prev) => ({
-            ...prev,
-            location: { type: 'Point', coordinates: [longitude, latitude] },
-            state,
-            district,
-            address,
-            pincode,
-          }));
-        } catch {
-          setFormData((prev) => ({
-            ...prev,
-            location: { type: 'Point', coordinates: [longitude, latitude] },
-          }));
-        }
-
-        setGeoStatus('success');
-      },
-      () => {
-        setGeoStatus('error');
-      }
-    );
   };
 
   return (
@@ -207,18 +252,104 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
         
         <div className="modal-header">
           <h2>
-            {mode === 'login' ? 'Welcome Back' 
-              : mode === 'signup' ? 'Join AgriConnect' 
+            {mode === 'adminLogin'
+              ? '🔐 Admin Login'
+              : mode === 'login'
+              ? role === 'farmer'
+                ? '🌾 Farmer Login'
+                : '🛒 Customer Login'
+              : mode === 'signup'
+              ? formData.role === 'farmer'
+                ? '🌾 Join as a Farmer'
+                : '🛒 Join as a Customer'
               : 'Reset Password'}
           </h2>
           <p>
-            {mode === 'login' ? 'Log in to manage your farm' 
-              : mode === 'signup' ? 'Create an account to get started' 
+            {mode === 'adminLogin'
+              ? 'Sign in to access the administrator portal'
+              : mode === 'login'
+              ? role === 'farmer'
+                ? 'Log in to manage your crops, inventory & advisories'
+                : 'Log in to browse fresh farm produce & track orders'
+              : mode === 'signup'
+              ? formData.role === 'farmer'
+                ? 'Create a farmer account to list crops and access subsidies'
+                : 'Create a customer account to buy directly from local farmers'
               : 'Enter your email to receive an OTP'}
           </p>
         </div>
 
-        {apiError && <div className="auth-alert auth-alert--error">⚠ {apiError}</div>}
+        {/* Dedicated Role Tabs for Farmer and Customer */}
+        {mode === 'login' && (
+          <div className="auth-role-tabs">
+            <button
+              type="button"
+              className={`auth-role-tab ${role === 'farmer' ? 'active-farmer' : ''}`}
+              onClick={() => {
+                setRole('farmer');
+                setApiError('');
+              }}
+            >
+              🌾 Farmer Login
+            </button>
+            <button
+              type="button"
+              className={`auth-role-tab ${role === 'customer' ? 'active-customer' : ''}`}
+              onClick={() => {
+                setRole('customer');
+                setApiError('');
+              }}
+            >
+              🛒 Customer Login
+            </button>
+          </div>
+        )}
+
+        {mode === 'signup' && !otpSent && (
+          <div className="auth-role-tabs">
+            <button
+              type="button"
+              className={`auth-role-tab ${formData.role === 'farmer' ? 'active-farmer' : ''}`}
+              onClick={() => {
+                setFormData((prev) => ({ ...prev, role: 'farmer' }));
+                setRole('farmer');
+                setApiError('');
+              }}
+            >
+              🌾 Register as Farmer
+            </button>
+            <button
+              type="button"
+              className={`auth-role-tab ${formData.role === 'customer' ? 'active-customer' : ''}`}
+              onClick={() => {
+                setFormData((prev) => ({ ...prev, role: 'customer' }));
+                setRole('customer');
+                setApiError('');
+              }}
+            >
+              🛒 Register as Customer
+            </button>
+          </div>
+        )}
+
+        {apiError && (
+          <div className="auth-alert auth-alert--error" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div>⚠ {apiError}</div>
+            {adminRedirectPrompt && (
+              <button
+                type="button"
+                className="btn-admin-header"
+                style={{ alignSelf: 'flex-start', marginTop: '2px', fontSize: '0.82rem', padding: '6px 12px' }}
+                onClick={() => {
+                  switchMode('adminLogin', 'admin');
+                  setAdminRedirectPrompt(false);
+                }}
+              >
+                🛡️ Switch to Admin Login →
+              </button>
+            )}
+          </div>
+        )}
         {apiSuccess && <div className="auth-alert auth-alert--success">✓ {apiSuccess}</div>}
 
         <form onSubmit={handleSubmit} className="auth-form">
@@ -233,15 +364,6 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
                   <label>Phone Number *</label>
                   <input type="tel" name="phone" required onChange={handleChange} value={formData.phone} placeholder="+91 98765 43210" />
                 </div>
-              </div>
-              
-              <div className="form-group">
-                <label>Role *</label>
-                <select name="role" required onChange={handleChange} value={formData.role}>
-                  <option value="farmer">Farmer</option>
-                  <option value="customer">Customer</option>
-                  <option value="admin">Admin</option>
-                </select>
               </div>
 
               <div className="form-group">
@@ -263,11 +385,21 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
                   disabled={geoStatus === 'loading'}
                 >
                   {geoStatus === 'loading' && <span className="geo-spinner"></span>}
-                  {geoStatus === 'idle' && '📍 Detect My Location'}
+                  {geoStatus === 'idle'    && '📍 Detecting your location...'}
                   {geoStatus === 'loading' && 'Fetching location...'}
                   {geoStatus === 'success' && `✅ Location Captured`}
-                  {geoStatus === 'error' && '❌ Failed — Try Again'}
+                  {geoStatus === 'error'   && '❌ Failed — Click to Try Again'}
                 </button>
+                {geoStatus === 'error' && (
+                  <p style={{ fontSize: '0.8rem', color: '#f87171', marginTop: '4px' }}>
+                    Location access denied or unavailable. Click above to retry, or fill in State manually.
+                  </p>
+                )}
+                {geoStatus === 'success' && formData.address && (
+                  <p style={{ fontSize: '0.8rem', color: '#86efac', marginTop: '4px' }}>
+                    📌 {formData.address}{formData.district ? `, ${formData.district}` : ''}{formData.state ? `, ${formData.state}` : ''}
+                  </p>
+                )}
               </div>
 
               <div className="form-row">
@@ -300,11 +432,11 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
             </div>
           )}
 
-          {mode === 'login' && (
+          {(mode === 'login' || mode === 'adminLogin') && (
             <>
               <div className="form-group">
                 <label>Email Address *</label>
-                <input type="email" name="email" required onChange={handleChange} value={formData.email} placeholder="you@example.com" />
+                <input type="email" name="email" required onChange={handleChange} value={formData.email} placeholder={mode === 'adminLogin' ? 'admin@agriconnect.com' : 'you@example.com'} />
               </div>
 
               <div className="form-group">
@@ -342,7 +474,8 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
           <button type="submit" className="btn-primary btn-full" disabled={isSubmitting}>
             {isSubmitting
               ? <><span className="geo-spinner"></span> Processing...</>
-              : mode === 'login' ? 'Log In' 
+              : mode === 'adminLogin' ? 'Log In as Admin'
+              : mode === 'login' ? (role === 'farmer' ? 'Log In as Farmer' : 'Log In as Customer')
               : mode === 'signup' && !otpSent ? 'Send OTP'
               : mode === 'signup' && otpSent ? 'Verify & Sign Up'
               : mode === 'forgotPassword' && forgotPasswordStep === 1 ? 'Send OTP'
@@ -352,10 +485,22 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', onSuccess }) => {
         </form>
 
         <div className="modal-footer">
-          {mode === 'login' ? (
-            <p>Don't have an account? <span onClick={() => switchMode('signup')} className="text-gradient link" style={{ cursor: 'pointer' }}>Sign Up</span></p>
+          {mode === 'adminLogin' ? (
+            <p>Not an administrator? <span onClick={() => switchMode('login', 'farmer')} className="text-gradient link" style={{ cursor: 'pointer' }}>Standard User Login</span></p>
+          ) : mode === 'login' ? (
+            <p>
+              Don't have an account?{' '}
+              <span onClick={() => switchMode('signup', role)} className="text-gradient link" style={{ cursor: 'pointer' }}>
+                Sign Up as {role === 'farmer' ? 'Farmer' : 'Customer'}
+              </span>
+            </p>
           ) : (
-            <p>Back to <span onClick={() => switchMode('login')} className="text-gradient link" style={{ cursor: 'pointer' }}>Log In</span></p>
+            <p>
+              Already registered? Back to{' '}
+              <span onClick={() => switchMode('login', formData.role || 'farmer')} className="text-gradient link" style={{ cursor: 'pointer' }}>
+                {formData.role === 'customer' ? 'Customer' : 'Farmer'} Log In
+              </span>
+            </p>
           )}
         </div>
       </div>

@@ -1,39 +1,66 @@
 import ai from "../config/gemini.js";
-
+import { get7DayWeatherForecast } from "./weatherService.js";
 
 export const explanation = async (question) => {
-
     try {
+        const lower = (question || "").toLowerCase();
+        let weatherContext = "";
+
+        // If the question asks about weather, forecast, rain, or temperatures
+        if (
+            lower.includes("weather") ||
+            lower.includes("forecast") ||
+            lower.includes("rain") ||
+            lower.includes("temperature") ||
+            lower.includes("climate") ||
+            lower.includes("7 days") ||
+            lower.includes("7 day") ||
+            lower.includes("next 7")
+        ) {
+            try {
+                const cities = [
+                    "pune", "mumbai", "nashik", "nagpur", "aurangabad", "kolhapur", "solapur", "satara",
+                    "delhi", "punjab", "ludhiana", "amritsar", "haryana", "karnal",
+                    "bengaluru", "bangalore", "hyderabad", "chennai", "kolkata",
+                    "ahmedabad", "jaipur", "lucknow", "patna", "bhopal", "indore"
+                ];
+                const matchedCity = cities.find((c) => lower.includes(c)) || "Pune";
+                const forecastData = await get7DayWeatherForecast(matchedCity);
+                weatherContext = `\n\nREAL-TIME 7-DAY WEATHER DATA FOR ${forecastData.location.toUpperCase()}:\n${JSON.stringify(forecastData, null, 2)}\n\nFormat this into a clean 7-day forecast with daily high/low temperatures (°C), conditions, rain chance (%), and farming tips (irrigation, spraying, harvesting).`;
+            } catch (wErr) {
+                console.warn("Could not attach weather context in explanation:", wErr.message);
+            }
+        }
 
         const response = await ai.models.generateContent({
-
             model: "gemini-3-flash-preview",
-
             contents: `
-You are an AI farming assistant.
+You are an expert AI farming and agricultural weather advisor in AgriConnect.
 
-Help farmers with practical agricultural advice.
+Help farmers with clear, practical agricultural advice.
 
-For every question provide:
+If the question is about weather or a 7-day forecast:
+- Present a comprehensive 7-day forecast day-by-day (Today, Tomorrow, and the next 5 days).
+- For each day, include: Day & Date, Condition (with emoji), High/Low Temp (°C), Rain Probability (%), and a practical Farming Advisory (e.g. good day for spraying, hold off irrigation, good harvest day).
+- Conclude with a Weekly Farming Recommendation.
+
+For agronomic, pest, or crop disease questions, provide:
 1. Possible reasons
 2. Solutions
 3. Prevention tips
 
-Keep the answer simple because the user is a farmer.
+Keep the tone supportive, simple, and practical for farmers.
 
 Farmer question:
-${question}
+${question}${weatherContext}
 `
         });
-
 
         return response.text;
 
     } catch(error) {
-
         console.log("Gemini Service Error:", error);
         throw error;
-
     }
 };
 

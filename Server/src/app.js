@@ -10,13 +10,16 @@ import techRoutes from "./routes/techRoutes.js";
 import notificationRoutes from "./routes/notifcationRoutes.js";
 import schemeRoutes from "./routes/schemeRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
-import aiRoutes from "./routes/aiRoutes.js"
+import aiRoutes from "./routes/aiRoutes.js";
+import paymentRoutes from "./routes/paymentRoutes.js";
+import trainingRoutes from "./routes/trainingRoutes.js";
+import marketPriceRoutes from "./routes/marketPriceRoutes.js";
 
 const app = express();
 
 app.use(express.json());
 app.use(cors({
-  origin: 'http://localhost:5173', // Adjust this if your frontend runs on a different port
+  origin: /^http:\/\/localhost:\d+$/,  // allow any localhost port
   credentials: true,
 }));
 app.use(cookieParser());
@@ -30,6 +33,9 @@ app.use("/api/notification",notificationRoutes);
 app.use("/api/schemes", schemeRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api/payment", paymentRoutes);
+app.use("/api/trainings", trainingRoutes);
+app.use("/api/market-prices", marketPriceRoutes);
 app.get("/", (req, res) => {
   res.send("Farmer Marketplace API Running");
 });

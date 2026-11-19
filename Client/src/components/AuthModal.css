@@ -247,6 +247,54 @@
   text-decoration: underline;
 }
 
+/* Role Switcher Tabs (Farmer vs Customer) */
+.auth-role-tabs {
+  display: flex;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  margin-bottom: 20px;
+}
+
+.auth-role-tab {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.auth-role-tab:hover {
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.auth-role-tab.active-farmer {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.45);
+  box-shadow: 0 2px 10px rgba(16, 185, 129, 0.15);
+}
+
+.auth-role-tab.active-customer {
+  background: rgba(56, 189, 248, 0.18);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.45);
+  box-shadow: 0 2px 10px rgba(56, 189, 248, 0.15);
+}
+
 /* Custom Scrollbar for modal content */
 .modal-content::-webkit-scrollbar {
   width: 6px;

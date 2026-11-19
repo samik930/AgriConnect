@@ -3,6 +3,7 @@ import Navbar from './components/Navbar';
 import Hero from './components/Hero';
 import Features from './components/Features';
 import AuthModal from './components/AuthModal';
+import ChatBot from './components/ChatBot';
 import FarmerDashboard from './pages/FarmerDashboard';
 import CustomerDashboard from './pages/CustomerDashboard';
 import AdminDashboard from './pages/AdminDashboard';
@@ -10,6 +11,7 @@ import AdminDashboard from './pages/AdminDashboard';
 function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState('login');
+  const [authRole, setAuthRole] = useState('farmer'); // 'farmer' | 'customer' | 'admin'
   const [loggedInUser, setLoggedInUser] = useState(null);
   const [currentView, setCurrentView] = useState('home');
 
@@ -21,8 +23,9 @@ function App() {
     }
   }, []);
 
-  const openAuthModal = (mode) => {
+  const openAuthModal = (mode, role = 'farmer') => {
     setAuthMode(mode);
+    setAuthRole(role);
     setIsAuthModalOpen(true);
   };
 
@@ -50,36 +53,53 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  if (currentView === 'dashboard' && loggedInUser) {
-    if (loggedInUser.role === 'farmer') {
-      return <FarmerDashboard onLogout={handleLogout} onLogoClick={handleLogoClick} />;
-    }
-    if (loggedInUser.role === 'customer') {
-      return <CustomerDashboard onLogout={handleLogout} onLogoClick={handleLogoClick} />;
-    }
-    if (loggedInUser.role === 'admin') {
-      return <AdminDashboard onLogout={handleLogout} onLogoClick={handleLogoClick} />;
-    }
-  }
-
   return (
     <div className="app-container">
-      <Navbar 
-        onLoginClick={() => openAuthModal('login')} 
-        onSignupClick={() => openAuthModal('signup')} 
-        isLoggedIn={!!loggedInUser}
-        onDashboardClick={() => setCurrentView('dashboard')}
-        onLogoClick={handleLogoClick}
-      />
-      <Hero />
-      <Features />
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        initialMode={authMode}
-        onSuccess={handleAuthSuccess}
-        key={isAuthModalOpen ? 'open' : 'closed'}
-      />
+      {currentView === 'dashboard' && loggedInUser ? (
+        <>
+          {loggedInUser.role === 'farmer' && (
+            <FarmerDashboard onLogout={handleLogout} onLogoClick={handleLogoClick} />
+          )}
+          {loggedInUser.role === 'customer' && (
+            <CustomerDashboard onLogout={handleLogout} onLogoClick={handleLogoClick} />
+          )}
+          {loggedInUser.role === 'admin' && (
+            <AdminDashboard onLogout={handleLogout} onLogoClick={handleLogoClick} />
+          )}
+        </>
+      ) : (
+        <>
+          <Navbar 
+            onFarmerLoginClick={() => openAuthModal('login', 'farmer')}
+            onCustomerLoginClick={() => openAuthModal('login', 'customer')}
+            onLoginClick={(role) => openAuthModal('login', role || 'farmer')} 
+            onSignupClick={(role) => openAuthModal('signup', role || 'farmer')} 
+            onAdminLoginClick={() => openAuthModal('adminLogin', 'admin')}
+            isLoggedIn={!!loggedInUser}
+            onDashboardClick={() => setCurrentView('dashboard')}
+            onLogoClick={handleLogoClick}
+          />
+          <Hero 
+            onFarmerLoginClick={() => openAuthModal('login', 'farmer')}
+            onCustomerLoginClick={() => openAuthModal('login', 'customer')}
+            isLoggedIn={!!loggedInUser}
+            user={loggedInUser}
+            onDashboardClick={() => setCurrentView('dashboard')}
+          />
+          <Features />
+          <AuthModal
+            isOpen={isAuthModalOpen}
+            onClose={() => setIsAuthModalOpen(false)}
+            initialMode={authMode}
+            initialRole={authRole}
+            onSuccess={handleAuthSuccess}
+            key={`${isAuthModalOpen}-${authMode}-${authRole}`}
+          />
+        </>
+      )}
+
+      {/* Global Multi-Agent AI Chatbot */}
+      <ChatBot user={loggedInUser} />
     </div>
   );
 }

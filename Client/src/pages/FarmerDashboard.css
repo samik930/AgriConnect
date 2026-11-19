@@ -232,6 +232,86 @@
   padding: 20px;
   transition: all var(--transition-fast);
   position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.product-card-image-wrap {
+  width: 100%;
+  height: 160px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.product-card-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform var(--transition-fast);
+}
+
+.product-card:hover .product-card-image {
+  transform: scale(1.04);
+}
+
+/* Image upload zone in modal */
+.image-upload-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px;
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.image-upload-zone:hover {
+  border-color: var(--color-primary);
+  background: rgba(16, 185, 129, 0.05);
+}
+
+.image-preview-box {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.image-preview-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+}
+
+.btn-remove-image {
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all var(--transition-fast);
+}
+
+.btn-remove-image:hover {
+  background: #ef4444;
+  color: #fff;
 }
 
 .product-card:hover {
@@ -991,11 +1071,57 @@
 
 .ai-mode-btn:first-child {
   border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  border-right: none;
 }
 
 .ai-mode-btn:last-child {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.ai-mode-btn:not(:last-child) {
+  border-right: none;
+}
+
+/* ── Multi-Agent Tags & Details ── */
+.ai-agent-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ai-agent-pill {
+  font-size: 0.72rem;
+  background: rgba(16,185,129,0.12);
+  color: var(--color-primary);
+  border: 1px solid rgba(16,185,129,0.25);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ai-agent-details-toggle {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  margin-top: 4px;
+  display: block;
+}
+
+.ai-agent-steps-box {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
 }
 
 .ai-mode-btn.active {

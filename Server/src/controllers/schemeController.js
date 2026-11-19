@@ -1,117 +1,157 @@
-import Scheme from "../models/Scheme.js";
+import { query } from "../db/index.js";
+import { formatScheme } from "../utils/formatters.js";
 
-export const CreateScheme = async(req,res) => {
-    try {
-        const scheme = await Scheme.create({
-            ...req.body,
-            createdBy : req.user?._id,
-        })
+export const CreateScheme = async (req, res) => {
+  try {
+    const { title, description, state, district, eligibility, applicationLink } = req.body;
+    const publishedBy = req.user?._id || req.user?.id;
 
-        res.status(201).json({
-            success: true,
-            scheme,
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    const result = await query(
+      `
+      INSERT INTO schemes (title, description, state, district, eligibility, application_link, published_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+      `,
+      [
+        title,
+        description,
+        state,
+        district || null,
+        eligibility || null,
+        applicationLink || null,
+        publishedBy,
+      ]
+    );
+
+    res.status(201).json({
+      success: true,
+      scheme: formatScheme(result.rows[0]),
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const getAllSchemes = async (req, res) => {
+  try {
+    const result = await query("SELECT * FROM schemes ORDER BY created_at DESC");
+    const schemes = result.rows.map(formatScheme);
+
+    res.status(200).json({
+      success: true,
+      schemes,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const getSchemeById = async (req, res) => {
+  try {
+    const result = await query("SELECT * FROM schemes WHERE id = $1", [req.params.id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        message: "Scheme not found",
+      });
     }
-}
 
-export const getAllSchemes = async(req,res) => {
-    try {
-        const schemes = await Scheme.find().sort({
-            createdAt : -1,
-        })
+    res.status(200).json({
+      success: true,
+      scheme: formatScheme(result.rows[0]),
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
 
-        if(!schemes) {
-            return res.status(400).json({
-                success : false,
-                message : "No schemes added yet",
-            })
-        }
+export const updateScheme = async (req, res) => {
+  try {
+    const { title, description, state, district, eligibility, applicationLink } = req.body;
 
-        res.status(201).json({
-            success: true,
-            schemes,
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    const setClauses = ["updated_at = NOW()"];
+    const values = [];
+    let idx = 1;
+
+    if (title !== undefined) {
+      setClauses.push(`title = $${idx++}`);
+      values.push(title);
     }
-}
-
-export const getSchemeById = async(req,res) => {
-    try {
-        const scheme = await Scheme.findById(req.params.id)
-        if(!scheme) {
-            return res.status(400).json({
-                message : "Scheme not found",
-            })
-        }
-        res.status(201).json({
-            success : true,
-            scheme
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    if (description !== undefined) {
+      setClauses.push(`description = $${idx++}`);
+      values.push(description);
     }
-}
-
-export const updateScheme = async(req,res) => {
-    try {
-        const scheme = await Scheme.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            {
-                new: true,
-                runValidators: true,
-            }
-        )
-
-        if(!scheme) {
-            return res.status(400).json({
-                success : false,
-                message : "Scheme Not found",
-            })
-        }
-
-        res.status(201).json({
-            success : true,
-            message : "Scheme updated",
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    if (state !== undefined) {
+      setClauses.push(`state = $${idx++}`);
+      values.push(state);
     }
-}
-
-export const deleteScheme = async(req,res) => {
-    try {
-        const scheme = await Scheme.findById(
-            req.params.id,
-        )
-
-        if(!scheme) {
-            return res.status(400).json({
-                success : false,
-                message : "Scheme not found",
-            })
-        }
-
-        await scheme.deleteOne()
-
-        res.status(201).json({
-            success : true,
-            message : "Scheme deleted",
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    if (district !== undefined) {
+      setClauses.push(`district = $${idx++}`);
+      values.push(district);
     }
-}
+    if (eligibility !== undefined) {
+      setClauses.push(`eligibility = $${idx++}`);
+      values.push(eligibility);
+    }
+    if (applicationLink !== undefined) {
+      setClauses.push(`application_link = $${idx++}`);
+      values.push(applicationLink);
+    }
+
+    values.push(req.params.id);
+
+    const updateSql = `
+      UPDATE schemes
+      SET ${setClauses.join(", ")}
+      WHERE id = $${idx}
+      RETURNING *
+    `;
+
+    const result = await query(updateSql, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Scheme Not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Scheme updated",
+      scheme: formatScheme(result.rows[0]),
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const deleteScheme = async (req, res) => {
+  try {
+    const result = await query("DELETE FROM schemes WHERE id = $1 RETURNING id", [req.params.id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Scheme not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Scheme deleted",
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};

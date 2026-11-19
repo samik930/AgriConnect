@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "agriconnect-farming": {
+      "command": "node",
+      "args": ["src/mcp/farming/index.js"],
+      "cwd": "e:\\AGRI_CONNECT\\Server"
+    },
+    "agriconnect-marketplace": {
+      "command": "node",
+      "args": ["src/mcp/marketplace/index.js"],
+      "cwd": "e:\\AGRI_CONNECT\\Server"
+    },
+    "agriconnect-logistics": {
+      "command": "node",
+      "args": ["src/mcp/logistics/index.js"],
+      "cwd": "e:\\AGRI_CONNECT\\Server"
+    },
+    "agriconnect-order-support": {
+      "command": "node",
+      "args": ["src/mcp/order-support/index.js"],
+      "cwd": "e:\\AGRI_CONNECT\\Server"
+    }
+  }
+}

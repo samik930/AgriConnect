@@ -1,111 +1,155 @@
-import Technology from "../models/Technology.js";
+import { query } from "../db/index.js";
+import { formatTechnology } from "../utils/formatters.js";
 
-export const addTechnology = async(req,res) => {
-    try {
-        const technology = await Technology.create({
-            ...req.body,
-            publishedBy : req.user?._id
-        })
+export const addTechnology = async (req, res) => {
+  try {
+    const { title, description, state, district, resourceLink } = req.body;
+    const publishedBy = req.user?._id || req.user?.id;
 
-        res.status(201).json({
-            success : true,
-            technology,
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    const result = await query(
+      `
+      INSERT INTO technologies (title, description, state, district, resource_link, published_by)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+      `,
+      [
+        title,
+        description,
+        state || "All",
+        district || null,
+        resourceLink || null,
+        publishedBy,
+      ]
+    );
+
+    res.status(201).json({
+      success: true,
+      technology: formatTechnology(result.rows[0]),
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const showAllTechs = async (req, res) => {
+  try {
+    const result = await query("SELECT * FROM technologies ORDER BY created_at DESC");
+    const technologies = result.rows.map(formatTechnology);
+
+    res.status(200).json({
+      success: true,
+      technologies,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const getTechById = async (req, res) => {
+  try {
+    const result = await query("SELECT * FROM technologies WHERE id = $1", [req.params.id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No technology found",
+      });
     }
-}
 
-export const showAllTechs = async(req,res) => {
-    try {
-        const technologies = await Technology.find().sort({createdAt:-1})
-        if(!technologies) {
-            return res.status(400).json({
-                success : false,
-                message : "No technology added yet",
-            })
-        }
-        
-        res.status(201).json({
-            success : true,
-            technologies,
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    res.status(200).json({
+      success: true,
+      technology: formatTechnology(result.rows[0]),
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const updateTechnology = async (req, res) => {
+  try {
+    const { title, description, state, district, resourceLink } = req.body;
+
+    const setClauses = ["updated_at = NOW()"];
+    const values = [];
+    let idx = 1;
+
+    if (title !== undefined) {
+      setClauses.push(`title = $${idx++}`);
+      values.push(title);
     }
-}
-
-export const getTechById = async(req,res) => {
-    try {
-        const technology = await Technology.findById(req.params.id)
-        if(!technology) {
-            return res.status(400).json({
-                success : false,
-                message : "No technology found",
-            })
-        }
-
-        res.status(201).json({
-            success : true,
-            technology,
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    if (description !== undefined) {
+      setClauses.push(`description = $${idx++}`);
+      values.push(description);
     }
-}
-
-export const updateTechnology = async(req,res) => {
-    try {
-        const technology = await Technology.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            {
-                new : true,
-                runValidators : true,
-            }
-        )
-
-        if(!technology) {
-            return res.status(400).json({
-                success : false,
-                message : "No technology found",
-            })
-        }
-
-        res.status(201).json({
-            success : true,
-            technology,
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    if (state !== undefined) {
+      setClauses.push(`state = $${idx++}`);
+      values.push(state);
     }
-}
-
-export const deleteTechnology = async(req,res) => {
-    try {
-        const technology = await Technology.findById(req.params.id);
-        if(!technology) {
-            return res.status(400).json({
-                success : false,
-                message : "No technology found",
-            })
-        }
-        await technology.deleteOne();
-        res.status(201).json({
-            success : true,
-            message : "Technology deleted",
-        })
-    } catch(error) {
-        res.status(500).json({
-            message : error.message,
-        })
+    if (district !== undefined) {
+      setClauses.push(`district = $${idx++}`);
+      values.push(district);
     }
-}
+    if (resourceLink !== undefined) {
+      setClauses.push(`resource_link = $${idx++}`);
+      values.push(resourceLink);
+    }
+
+    values.push(req.params.id);
+
+    const updateSql = `
+      UPDATE technologies
+      SET ${setClauses.join(", ")}
+      WHERE id = $${idx}
+      RETURNING *
+    `;
+
+    const result = await query(updateSql, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No technology found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      technology: formatTechnology(result.rows[0]),
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const deleteTechnology = async (req, res) => {
+  try {
+    const result = await query(
+      "DELETE FROM technologies WHERE id = $1 RETURNING id",
+      [req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No technology found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Technology deleted",
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
