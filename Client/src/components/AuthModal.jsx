@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './AuthModal.css';
+import { geocodePincode } from '../utils/pincodeGeocode';
 
 // Safe fetch: throws a friendly error if server is unreachable or returns non-JSON
 const safeFetch = async (url, options) => {
@@ -23,6 +24,7 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', initialRole = 'farm
   const [mode, setMode] = useState(initialMode); // 'login', 'signup', 'forgotPassword', 'adminLogin'
   const [role, setRole] = useState(initialRole || 'farmer'); // 'farmer' | 'customer'
   const [geoStatus, setGeoStatus] = useState('idle'); // 'idle' | 'loading' | 'success' | 'error'
+  const [pincodeStatus, setPincodeStatus] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [apiError, setApiError] = useState('');
   const [apiSuccess, setApiSuccess] = useState('');
@@ -99,7 +101,40 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', initialRole = 'farm
 
   if (!isOpen) return null;
 
+  const handlePincodeInput = async (pinValue) => {
+    const cleanPin = pinValue.replace(/\D/g, '').slice(0, 6);
+    setFormData((prev) => ({ ...prev, pincode: cleanPin }));
+
+    if (cleanPin.length === 6) {
+      setPincodeStatus('🔍 Calculating coordinates from pincode...');
+      try {
+        const geo = await geocodePincode(cleanPin, formData.district, formData.state);
+        if (geo && geo.lat != null && geo.lng != null) {
+          setFormData((prev) => ({
+            ...prev,
+            pincode: cleanPin,
+            state: prev.state || geo.state,
+            district: prev.district || geo.district,
+            location: { type: 'Point', coordinates: [geo.lng, geo.lat] },
+          }));
+          setPincodeStatus(`📍 Coordinates: [${geo.lat.toFixed(4)}, ${geo.lng.toFixed(4)}] (${geo.district}, ${geo.state})`);
+          setGeoStatus('success');
+        } else {
+          setPincodeStatus('⚠️ Coordinates will be resolved automatically on submit.');
+        }
+      } catch {
+        setPincodeStatus('');
+      }
+    } else {
+      setPincodeStatus('');
+    }
+  };
+
   const handleChange = (e) => {
+    if (e.target.name === 'pincode') {
+      handlePincodeInput(e.target.value);
+      return;
+    }
     setFormData({ ...formData, [e.target.name]: e.target.value });
     setApiError('');
     setAdminRedirectPrompt(false);
@@ -414,12 +449,25 @@ const AuthModal = ({ isOpen, onClose, initialMode = 'login', initialRole = 'farm
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label>Address</label>
-                  <input type="text" name="address" onChange={handleChange} value={formData.address} placeholder="123 Farm Lane" />
+                  <label>Pincode *</label>
+                  <input
+                    type="text"
+                    name="pincode"
+                    required
+                    onChange={handleChange}
+                    value={formData.pincode}
+                    placeholder="e.g. 700001 or 400001"
+                    maxLength={6}
+                  />
+                  {pincodeStatus && (
+                    <div style={{ fontSize: '0.78rem', marginTop: '4px', color: '#10b981', fontWeight: 600 }}>
+                      {pincodeStatus}
+                    </div>
+                  )}
                 </div>
                 <div className="form-group">
-                  <label>Pincode</label>
-                  <input type="text" name="pincode" onChange={handleChange} value={formData.pincode} placeholder="411001" />
+                  <label>Address</label>
+                  <input type="text" name="address" onChange={handleChange} value={formData.address} placeholder="123 Farm Lane" />
                 </div>
               </div>
             </>

@@ -27,16 +27,24 @@ export const uploadProductImage = async (req, res) => {
 // Query: GET /api/products/nearby?lat=22.5726&lng=88.3639
 export const getNearbyProducts = async (req, res) => {
   try {
-    const { lat, lng } = req.query;
+    let { lat, lng, radius } = req.query;
+
+    if (!lat || !lng) {
+      if (req.user?.location?.coordinates?.length === 2) {
+        lng = req.user.location.coordinates[0];
+        lat = req.user.location.coordinates[1];
+      }
+    }
 
     if (!lat || !lng) {
       return res.status(400).json({
-        message: "lat and lng query parameters are required",
+        message: "lat and lng query parameters or user coordinates required",
       });
     }
 
     const latitude = parseFloat(lat);
     const longitude = parseFloat(lng);
+    const radiusKm = parseFloat(radius) || DELIVERY_RADIUS_KM;
 
     // Find nearby products from farmers within 50 km using PostGIS ST_DWithin
     const productsRes = await query(
@@ -54,7 +62,7 @@ export const getNearbyProducts = async (req, res) => {
         AND ST_DWithin(u.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
       ORDER BY distance_km ASC, p.created_at DESC
       `,
-      [longitude, latitude, DELIVERY_RADIUS_KM * 1000]
+      [longitude, latitude, radiusKm * 1000]
     );
 
     const formattedProducts = productsRes.rows.map(formatProduct);
@@ -63,7 +71,7 @@ export const getNearbyProducts = async (req, res) => {
     res.json({
       totalNearbyFarmers: uniqueFarmers.size,
       totalProducts: formattedProducts.length,
-      radiusKm: DELIVERY_RADIUS_KM,
+      radiusKm,
       products: formattedProducts,
     });
   } catch (error) {
@@ -108,17 +116,50 @@ export const createProduct = async (req, res) => {
 
 export const getAllProducts = async (req, res) => {
   try {
-    const result = await query(`
-      SELECT 
-        p.id, p.farmer_id, p.name, p.category, p.description, p.price, p.stock, p.unit, p.image_url, p.created_at, p.updated_at,
-        u.name AS farmer_name, u.email AS farmer_email, u.district AS farmer_district, u.state AS farmer_state,
-        ST_X(u.location::geometry) AS farmer_lng,
-        ST_Y(u.location::geometry) AS farmer_lat
-      FROM products p
-      JOIN users u ON p.farmer_id = u.id
-      ORDER BY p.created_at DESC
-    `);
+    let { lat, lng, radius } = req.query;
 
+    // Fallback: If query coordinates are not explicitly passed, check authenticated user's location
+    if ((!lat || !lng) && req.user?.location?.coordinates?.length === 2) {
+      lng = req.user.location.coordinates[0];
+      lat = req.user.location.coordinates[1];
+    }
+
+    let sql;
+    let params = [];
+
+    // If customer coordinates are provided (or resolved from user profile), strictly enforce 50 km PostGIS radius
+    if (lat && lng) {
+      const radiusKm = parseFloat(radius) || DELIVERY_RADIUS_KM;
+      const radiusMeters = radiusKm * 1000;
+      sql = `
+        SELECT 
+          p.id, p.farmer_id, p.name, p.category, p.description, p.price, p.stock, p.unit, p.image_url, p.created_at, p.updated_at,
+          u.name AS farmer_name, u.email AS farmer_email, u.district AS farmer_district, u.state AS farmer_state,
+          ST_X(u.location::geometry) AS farmer_lng,
+          ST_Y(u.location::geometry) AS farmer_lat,
+          ROUND((ST_Distance(u.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) / 1000)::numeric, 1) AS distance_km
+        FROM products p
+        JOIN users u ON p.farmer_id = u.id
+        WHERE u.role = 'farmer'
+          AND u.location IS NOT NULL
+          AND ST_DWithin(u.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
+        ORDER BY distance_km ASC, p.created_at DESC
+      `;
+      params = [parseFloat(lng), parseFloat(lat), radiusMeters];
+    } else {
+      sql = `
+        SELECT 
+          p.id, p.farmer_id, p.name, p.category, p.description, p.price, p.stock, p.unit, p.image_url, p.created_at, p.updated_at,
+          u.name AS farmer_name, u.email AS farmer_email, u.district AS farmer_district, u.state AS farmer_state,
+          ST_X(u.location::geometry) AS farmer_lng,
+          ST_Y(u.location::geometry) AS farmer_lat
+        FROM products p
+        JOIN users u ON p.farmer_id = u.id
+        ORDER BY p.created_at DESC
+      `;
+    }
+
+    const result = await query(sql, params);
     const products = result.rows.map(formatProduct);
     res.json(products);
   } catch (error) {

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import './FarmerDashboard.css';
 import AIAssistant from '../components/AIAssistant';
 import UpdateLocationButton from '../components/UpdateLocationButton';
+import { geocodePincode } from '../utils/pincodeGeocode';
 
 /* ─── Helper: authenticated fetch ─────────────────────────── */
 const authFetch = (url, options = {}) => {
@@ -35,7 +36,10 @@ const EMPTY_PRODUCT = { name: '', category: '', description: '', price: '', stoc
 
 /* ═══════════════════════════════════════════════════════════ */
 const FarmerDashboard = ({ onLogout, onLogoClick }) => {
-  const user = JSON.parse(localStorage.getItem('agriconnect_user') || '{}');
+  const [currentUser, setCurrentUser] = useState(() => {
+    return JSON.parse(localStorage.getItem('agriconnect_user') || '{}');
+  });
+  const user = currentUser;
   const [activeTab, setActiveTab] = useState('overview');
 
   /* products */
@@ -43,12 +47,12 @@ const FarmerDashboard = ({ onLogout, onLogoClick }) => {
   const [productsLoading, setProductsLoading] = useState(false);
   const [productsError, setProductsError] = useState('');
 
-/* notification (schemes + technologies) */
-   const [notification, setNotification] = useState({ schemes: [], technologies: [] });
-   const [notifLoading, setNotifLoading] = useState(false);
-   /* unread counts for notifications */
-   const [unreadSchemesCount, setUnreadSchemesCount] = useState(0);
-   const [unreadTechnologiesCount, setUnreadTechnologiesCount] = useState(0);
+  /* notification (schemes + technologies) */
+  const [notification, setNotification] = useState({ schemes: [], technologies: [] });
+  const [notifLoading, setNotifLoading] = useState(false);
+  /* unread counts for notifications */
+  const [unreadSchemesCount, setUnreadSchemesCount] = useState(0);
+  const [unreadTechnologiesCount, setUnreadTechnologiesCount] = useState(0);
 
   /* weather */
   const [weather, setWeather] = useState(null);
@@ -66,8 +70,16 @@ const FarmerDashboard = ({ onLogout, onLogoClick }) => {
 
   /* profile */
   const [profileData, setProfileData] = useState({
-    name: user.name || '', email: user.email || '', phone: user.phone || '', state: user.state || '', district: user.district || '', address: user.address || ''
+    name: user.name || '',
+    email: user.email || '',
+    phone: user.phone || '',
+    state: user.state || '',
+    district: user.district || '',
+    address: user.address || '',
+    pincode: user.pincode || '',
   });
+  const [pincodeStatus, setPincodeStatus] = useState('');
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
   /* orders */
   const [orders, setOrders] = useState([]);
@@ -760,6 +772,78 @@ useEffect(() => {
     </>
   );
 
+  const handlePincodeChange = async (pinValue) => {
+    const cleanPin = pinValue.replace(/\D/g, '').slice(0, 6);
+    setProfileData(prev => ({ ...prev, pincode: cleanPin }));
+
+    if (cleanPin.length === 6) {
+      setPincodeStatus('🔍 Calculating farm coordinates from pincode...');
+      try {
+        const geo = await geocodePincode(cleanPin, profileData.district, profileData.state);
+        if (geo && geo.lat != null && geo.lng != null) {
+          setPincodeStatus(`📍 Farm Coordinates: [${geo.lat.toFixed(4)}, ${geo.lng.toFixed(4)}] (${geo.district}, ${geo.state})`);
+          setProfileData(prev => ({
+            ...prev,
+            pincode: cleanPin,
+            state: prev.state || geo.state,
+            district: prev.district || geo.district,
+          }));
+        } else {
+          setPincodeStatus('⚠️ Pincode entered. Will be resolved on update.');
+        }
+      } catch {
+        setPincodeStatus('');
+      }
+    } else {
+      setPincodeStatus('');
+    }
+  };
+
+  const handleUpdateProfile = async (e) => {
+    if (e) e.preventDefault();
+    setIsUpdatingProfile(true);
+    try {
+      let finalLocation = user.location;
+      if (profileData.pincode && /^\d{6}$/.test(profileData.pincode.trim())) {
+        const pinGeo = await geocodePincode(profileData.pincode, profileData.district, profileData.state);
+        if (pinGeo) {
+          finalLocation = { type: 'Point', coordinates: [pinGeo.lng, pinGeo.lat] };
+        }
+      }
+
+      const res = await authFetch('/api/auth/profile', {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: profileData.name,
+          phone: profileData.phone,
+          state: profileData.state,
+          district: profileData.district,
+          address: profileData.address,
+          pincode: profileData.pincode,
+          location: finalLocation,
+        }),
+      });
+
+      if (res.ok) {
+        const updated = await res.json();
+        const updatedUser = {
+          ...currentUser,
+          ...updated,
+        };
+        setCurrentUser(updatedUser);
+        localStorage.setItem('agriconnect_user', JSON.stringify(updatedUser));
+        alert('🎉 Farm profile updated! Coordinates calculated from pincode: ' + (profileData.pincode || ''));
+      } else {
+        const err = await res.json();
+        alert('Failed to update profile: ' + (err.message || 'Unknown error'));
+      }
+    } catch (err) {
+      alert('Error updating profile: ' + err.message);
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
+
   const renderProfile = () => (
     <>
       <h2 className="db-section-title">👤 My Profile</h2>
@@ -768,44 +852,110 @@ useEffect(() => {
           {(user.name || 'F')[0].toUpperCase()}
         </div>
         <div className="profile-fields">
-          {[
-            { label: 'Full Name', key: 'name' },
-            { label: 'Email', key: 'email' },
-            { label: 'Phone', key: 'phone' },
-            { label: 'State', key: 'state' },
-            { label: 'District', key: 'district' },
-            { label: 'Address', key: 'address' },
-          ].map(({ label, key }) => (
-            <div className="profile-field" key={key}>
-              <label>{label}</label>
-              <input
-                type="text"
-                value={profileData[key]}
-                onChange={e => setProfileData(prev => ({ ...prev, [key]: e.target.value }))}
-                placeholder={`Enter ${label.toLowerCase()}`}
-              />
-            </div>
-          ))}
+          <div className="profile-field">
+            <label>Full Name</label>
+            <input
+              type="text"
+              value={profileData.name}
+              onChange={e => setProfileData(prev => ({ ...prev, name: e.target.value }))}
+              placeholder="Your Full Name"
+            />
+          </div>
+          <div className="profile-field">
+            <label>Email</label>
+            <input
+              type="text"
+              value={profileData.email}
+              disabled
+              style={{ opacity: 0.7, cursor: 'not-allowed' }}
+            />
+          </div>
+          <div className="profile-field">
+            <label>Phone</label>
+            <input
+              type="text"
+              value={profileData.phone}
+              onChange={e => setProfileData(prev => ({ ...prev, phone: e.target.value }))}
+              placeholder="Mobile Number"
+            />
+          </div>
+          <div className="profile-field">
+            <label>Pincode (Calculates Farm GPS Coordinates) *</label>
+            <input
+              type="text"
+              value={profileData.pincode}
+              onChange={e => handlePincodeChange(e.target.value)}
+              placeholder="e.g. 700001 or 400001"
+              maxLength={6}
+            />
+            {pincodeStatus && (
+              <div style={{ fontSize: '0.8rem', marginTop: '4px', color: '#10b981', fontWeight: 600 }}>
+                {pincodeStatus}
+              </div>
+            )}
+          </div>
+          <div className="profile-field">
+            <label>District</label>
+            <input
+              type="text"
+              value={profileData.district}
+              onChange={e => setProfileData(prev => ({ ...prev, district: e.target.value }))}
+              placeholder="District"
+            />
+          </div>
+          <div className="profile-field">
+            <label>State</label>
+            <input
+              type="text"
+              value={profileData.state}
+              onChange={e => setProfileData(prev => ({ ...prev, state: e.target.value }))}
+              placeholder="State"
+            />
+          </div>
+          <div className="profile-field">
+            <label>Farm Address</label>
+            <input
+              type="text"
+              value={profileData.address}
+              onChange={e => setProfileData(prev => ({ ...prev, address: e.target.value }))}
+              placeholder="Farm or Village Address"
+            />
+          </div>
         </div>
-        <button className="btn-primary" style={{ padding: '12px 32px', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700, background: 'var(--color-primary)', color: '#fff' }}>
-          Update Profile
+        <button
+          className="btn-primary"
+          style={{ padding: '12px 32px', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700, background: 'var(--color-primary)', color: '#fff' }}
+          onClick={handleUpdateProfile}
+          disabled={isUpdatingProfile}
+        >
+          {isUpdatingProfile ? 'Updating Profile...' : 'Update Profile & Calculate Farm Coordinates'}
         </button>
         <div style={{ marginTop: '12px' }}>
           <UpdateLocationButton onUpdated={(updated) => {
-            const stored = JSON.parse(localStorage.getItem('agriconnect_user') || '{}');
+            const updatedUser = {
+              ...currentUser,
+              location: updated.location,
+              state:    updated.state    || currentUser.state,
+              district: updated.district || currentUser.district,
+              address:  updated.address  || currentUser.address,
+              pincode:  updated.pincode  || currentUser.pincode,
+            };
+            setCurrentUser(updatedUser);
+            localStorage.setItem('agriconnect_user', JSON.stringify(updatedUser));
             setProfileData(prev => ({
               ...prev,
               state:    updated.state    || prev.state,
               district: updated.district || prev.district,
               address:  updated.address  || prev.address,
+              pincode:  updated.pincode  || prev.pincode,
             }));
           }} />
           {user.location?.coordinates?.length === 2
             ? <p style={{ fontSize: '0.78rem', color: '#86efac', marginTop: 4 }}>
-                📌 Coordinates saved: [{user.location.coordinates[1].toFixed(4)}, {user.location.coordinates[0].toFixed(4)}]
+                📌 Active Farm PostGIS Coordinates: [{user.location.coordinates[1].toFixed(4)}, {user.location.coordinates[0].toFixed(4)}]
               </p>
             : <p style={{ fontSize: '0.78rem', color: '#fca5a5', marginTop: 4 }}>
-                ⚠ No location saved yet — click above to set it.
+                ⚠ No location saved yet — enter Pincode above or click Update Location.
               </p>
           }
         </div>

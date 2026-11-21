@@ -1,5 +1,6 @@
 import { query } from "../db/index.js";
 import { formatMarketPrice } from "../utils/formatters.js";
+import { broadcastMarketPriceUpdate } from "../utils/emailNotifier.js";
 
 /**
  * 1. Create APMC / Mandi Benchmark Market Price (Admin only)
@@ -30,10 +31,15 @@ export const createMarketPrice = async (req, res) => {
       [cropName.trim(), district.trim(), price, unit || "kg"]
     );
 
+    const formatted = formatMarketPrice(result.rows[0]);
+
+    // Send real-time Gmail notification to all registered farmers
+    broadcastMarketPriceUpdate(formatted, false);
+
     res.status(201).json({
       success: true,
       message: "Benchmark APMC market price created successfully",
-      marketPrice: formatMarketPrice(result.rows[0]),
+      marketPrice: formatted,
     });
   } catch (error) {
     console.error("Create market price error:", error);
@@ -152,10 +158,15 @@ export const updateMarketPrice = async (req, res) => {
       });
     }
 
+    const formatted = formatMarketPrice(result.rows[0]);
+
+    // Send real-time Gmail notification to all registered farmers
+    broadcastMarketPriceUpdate(formatted, true);
+
     res.status(200).json({
       success: true,
       message: "Benchmark APMC market price updated successfully",
-      marketPrice: formatMarketPrice(result.rows[0]),
+      marketPrice: formatted,
     });
   } catch (error) {
     console.error("Update market price error:", error);

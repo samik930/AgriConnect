@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import './FarmerDashboard.css'; // Reusing the same CSS for identical styling
 import UpdateLocationButton from '../components/UpdateLocationButton';
+import DeliveryRadiusMap from '../components/DeliveryRadiusMap';
 import { loadRazorpayScript } from '../utils/razorpay';
 import RazorpayModal from '../components/RazorpayModal';
+import { geocodePincode } from '../utils/pincodeGeocode';
 
 const authFetch = (url, options = {}) => {
   return fetch(url, {
@@ -16,7 +18,10 @@ const authFetch = (url, options = {}) => {
 };
 
 const CustomerDashboard = ({ onLogout, onLogoClick }) => {
-  const user = JSON.parse(localStorage.getItem('agriconnect_user') || '{}');
+  const [currentUser, setCurrentUser] = useState(() => {
+    return JSON.parse(localStorage.getItem('agriconnect_user') || '{}');
+  });
+  const user = currentUser;
   const [activeTab, setActiveTab] = useState('overview');
   
   const [products, setProducts] = useState([]);
@@ -24,8 +29,16 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
   
   // Profile Data
   const [profileData, setProfileData] = useState({
-    name: user.name || '', email: user.email || '', phone: user.phone || '', state: user.state || '', district: user.district || '', address: user.address || ''
+    name: user.name || '',
+    email: user.email || '',
+    phone: user.phone || '',
+    state: user.state || '',
+    district: user.district || '',
+    address: user.address || '',
+    pincode: user.pincode || '',
   });
+  const [pincodeStatus, setPincodeStatus] = useState('');
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
   const [orders, setOrders] = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -37,37 +50,109 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
   const [razorpayOrder, setRazorpayOrder] = useState(null);
   const [isRzpModalOpen, setIsRzpModalOpen] = useState(false);
   const [paymentProcessing, setPaymentProcessing] = useState(false);
+  const [farmersViewMode, setFarmersViewMode] = useState('map'); // 'map' | 'cards'
 
   // Preload Razorpay Checkout SDK
   useEffect(() => {
     loadRazorpayScript();
   }, []);
 
-  // Derive nearby farmers from loaded products
-  const nearbyFarmers = Array.from(new Set(products.filter(p => p.farmer).map(p => p.farmer._id)))
-    .map(id => {
-      const farmerProducts = products.filter(p => p.farmer?._id === id);
-      const farmer = farmerProducts[0].farmer;
-      return {
-        id: farmer._id,
-        name: farmer.name,
-        district: farmer.district || 'Unknown',
-        productsAvailable: farmerProducts.length
-      };
+  // Derive nearby farmers from loaded products with geographical coordinates
+  // Strictly enforces the 50 km delivery rule
+  const nearbyFarmers = useMemo(() => {
+    const cLng = user.location?.coordinates?.[0] ?? user.location?.lng;
+    const cLat = user.location?.coordinates?.[1] ?? user.location?.lat;
+
+    // Filter products: only products with a valid farmer and strictly within 50 km
+    const validProducts = products.filter((p) => {
+      if (!p.farmer) return false;
+      if (p.distanceKm != null && p.distanceKm > 50) return false;
+      return true;
     });
 
-  const fetchProducts = useCallback(async () => {
+    const validFarmerIds = Array.from(
+      new Set(validProducts.map((p) => p.farmer._id || p.farmer.id))
+    );
+
+    return validFarmerIds
+      .map((id) => {
+        const farmerProducts = validProducts.filter(
+          (p) => (p.farmer?._id || p.farmer?.id) === id
+        );
+        const farmer = farmerProducts[0].farmer;
+        const fLng = farmer.location?.coordinates?.[0] ?? farmer.location?.lng;
+        const fLat = farmer.location?.coordinates?.[1] ?? farmer.location?.lat;
+
+        let distanceKm = farmerProducts[0].distanceKm;
+        if (distanceKm == null && cLat != null && cLng != null && fLat != null && fLng != null) {
+          const R = 6371;
+          const dLat = ((fLat - cLat) * Math.PI) / 180;
+          const dLon = ((fLng - cLng) * Math.PI) / 180;
+          const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos((cLat * Math.PI) / 180) *
+              Math.cos((fLat * Math.PI) / 180) *
+              Math.sin(dLon / 2) *
+              Math.sin(dLon / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          distanceKm = parseFloat((R * c).toFixed(1));
+        }
+
+        return {
+          id: farmer._id || farmer.id,
+          name: farmer.name,
+          email: farmer.email,
+          state: farmer.state,
+          district: farmer.district || 'Unknown',
+          location: farmer.location,
+          coordinates: farmer.location?.coordinates || (fLng != null && fLat != null ? [fLng, fLat] : null),
+          distanceKm: distanceKm != null ? distanceKm : null,
+          productsAvailable: farmerProducts.length,
+          products: farmerProducts.map((p) => ({
+            id: p._id || p.id,
+            name: p.name,
+            price: p.price,
+            unit: p.unit || 'kg',
+            stock: p.stock,
+            image: p.image || p.imageUrl,
+          })),
+        };
+      })
+      .filter((f) => {
+        // Enforce 50 km delivery radius: if distance is known, must be <= 50 km
+        if (f.distanceKm != null) {
+          return f.distanceKm <= 50;
+        }
+        return true;
+      });
+  }, [products, user.location]);
+
+  const fetchProducts = useCallback(async (locOverride) => {
     setProductsLoading(true);
     try {
-      const res = await fetch('/api/products');
+      const loc = locOverride || user.location;
+      const cLng = loc?.coordinates?.[0] ?? loc?.lng;
+      const cLat = loc?.coordinates?.[1] ?? loc?.lat;
+
+      let url = '/api/products';
+      if (cLat != null && cLng != null) {
+        url = `/api/products?lat=${cLat}&lng=${cLng}&radius=50`;
+      }
+      const res = await authFetch(url);
       const data = await res.json();
-      setProducts(Array.isArray(data) ? data : []);
+      const rawList = Array.isArray(data) ? data : [];
+      // Strictly filter out any products > 50 km
+      const filtered = rawList.filter((p) => {
+        if (p.distanceKm != null && p.distanceKm > 50) return false;
+        return true;
+      });
+      setProducts(filtered);
     } catch {
       // silent fail
     } finally {
       setProductsLoading(false);
     }
-  }, []);
+  }, [user.location]);
 
   const fetchOrders = useCallback(async () => {
     setOrdersLoading(true);
@@ -265,12 +350,13 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
 
   /* ─── Sidebar nav items ─── */
   const navItems = [
-    { id: 'overview',     label: 'Overview',        icon: '📊' },
-    { id: 'browse',       label: 'Browse Products', icon: '🛒' },
-    { id: 'cart',         label: 'My Cart',         icon: '🛍️' },
-    { id: 'orders',       label: 'My Orders',       icon: '📦' },
-    { id: 'farmers',      label: 'Nearby Farmers',  icon: '👨‍🌾' },
-    { id: 'profile',      label: 'Profile',         icon: '👤' },
+    { id: 'overview',     label: 'Overview',           icon: '📊' },
+    { id: 'browse',       label: 'Browse Products',    icon: '🛒' },
+    { id: 'map',          label: '50 km Radius Map',   icon: '📍' },
+    { id: 'farmers',      label: 'Nearby Farmers',     icon: '👨‍🌾' },
+    { id: 'cart',         label: 'My Cart',            icon: '🛍️' },
+    { id: 'orders',       label: 'My Orders',          icon: '📦' },
+    { id: 'profile',      label: 'Profile',            icon: '👤' },
   ];
 
   const renderOverview = () => (
@@ -291,14 +377,24 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
           <div className="stat-card-value">{orders.length}</div>
           <div className="stat-card-label">Orders Placed</div>
         </div>
-        <div className="stat-card">
-          <div className="stat-card-icon">👨‍🌾</div>
+        <div className="stat-card" onClick={() => setActiveTab('map')} style={{ cursor: 'pointer' }} title="Click to open 50 km delivery map">
+          <div className="stat-card-icon">📍</div>
           <div className="stat-card-value">{nearbyFarmers.length}</div>
-          <div className="stat-card-label">Farmers Available Nearby</div>
+          <div className="stat-card-label">Farms on 50 km Map →</div>
         </div>
       </div>
 
-      <h2 className="db-section-title">🛒 Browse Products</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '24px', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
+        <h2 className="db-section-title" style={{ margin: 0 }}>🛒 Fresh Local Produce</h2>
+        <button
+          type="button"
+          className="btn-secondary"
+          style={{ padding: '6px 14px', fontSize: '0.84rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+          onClick={() => setActiveTab('map')}
+        >
+          📍 Explore 50 km Delivery Map →
+        </button>
+      </div>
       {renderBrowseProducts(true)}
     </>
   );
@@ -340,6 +436,11 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
                 <div className="product-meta" style={{ marginTop: '10px' }}>
                   <span>👨‍🌾 Farmer: {p.farmer?.name || 'Local Farmer'}</span><br/>
                   <span>📍 District: {p.farmer?.district || 'Nearby'}</span>
+                  {p.distanceKm != null && (
+                    <span style={{ display: 'block', color: '#10b981', fontWeight: 600, fontSize: '0.82rem', marginTop: '4px' }}>
+                      ⚡ {p.distanceKm} km away (within 50 km zone)
+                    </span>
+                  )}
                 </div>
                 {!compact && (
                   <div className="product-actions" style={{ marginTop: '15px', display: 'flex', gap: '8px' }}>
@@ -439,29 +540,169 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
     </>
   );
 
-  const renderFarmers = () => (
+  const renderMap = () => (
     <>
-      <h2 className="db-section-title">👨‍🌾 Nearby Farmers</h2>
-      <div className="farmers-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
-        {nearbyFarmers.map(farmer => (
-          <div className="farmer-card" key={farmer.id} style={{ background: 'var(--color-bg-secondary)', padding: '20px', borderRadius: '12px', border: '1px solid var(--color-border)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', marginBottom: '15px' }}>
-              <div style={{ width: '50px', height: '50px', borderRadius: '50%', background: 'var(--color-primary)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 'bold' }}>
-                {farmer.name[0]}
-              </div>
-              <div>
-                <h4 style={{ margin: 0, fontSize: '1.1rem' }}>{farmer.name}</h4>
-                <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: '0.9rem' }}>📍 {farmer.district}</p>
-              </div>
-            </div>
-            <div style={{ padding: '10px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '8px', fontSize: '0.9rem' }}>
-              <strong>{farmer.productsAvailable}</strong> Products Available
-            </div>
-          </div>
-        ))}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+        <h2 className="db-section-title" style={{ margin: 0 }}>📍 50 km PostGIS Delivery Radius Map</h2>
+        <button
+          type="button"
+          className="btn-secondary"
+          style={{ padding: '8px 16px', fontSize: '0.86rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+          onClick={() => setActiveTab('farmers')}
+        >
+          👨‍🌾 View Farmer Cards List →
+        </button>
       </div>
+      <DeliveryRadiusMap
+        customerLocation={user.location || { district: user.district, address: user.address }}
+        farmers={nearbyFarmers}
+      />
     </>
   );
+
+  const renderFarmers = () => (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+        <h2 className="db-section-title" style={{ margin: 0 }}>👨‍🌾 Nearby Farmers ({nearbyFarmers.length})</h2>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            type="button"
+            className={`btn-secondary ${farmersViewMode === 'map' ? 'active' : ''}`}
+            style={{
+              padding: '8px 16px',
+              fontSize: '0.86rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              borderColor: farmersViewMode === 'map' ? 'var(--color-primary)' : 'var(--color-border)',
+              background: farmersViewMode === 'map' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+              color: farmersViewMode === 'map' ? '#34d399' : 'inherit'
+            }}
+            onClick={() => setFarmersViewMode('map')}
+          >
+            🗺️ Interactive 50 km Map
+          </button>
+          <button
+            type="button"
+            className={`btn-secondary ${farmersViewMode === 'cards' ? 'active' : ''}`}
+            style={{
+              padding: '8px 16px',
+              fontSize: '0.86rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              borderColor: farmersViewMode === 'cards' ? 'var(--color-primary)' : 'var(--color-border)',
+              background: farmersViewMode === 'cards' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+              color: farmersViewMode === 'cards' ? '#34d399' : 'inherit'
+            }}
+            onClick={() => setFarmersViewMode('cards')}
+          >
+            📋 Grid Cards
+          </button>
+        </div>
+      </div>
+
+      {farmersViewMode === 'map' ? (
+        <DeliveryRadiusMap
+          customerLocation={user.location || { district: user.district, address: user.address }}
+          farmers={nearbyFarmers}
+        />
+      ) : (
+        <div className="farmers-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
+          {nearbyFarmers.map(farmer => (
+            <div className="farmer-card" key={farmer.id} style={{ background: 'var(--color-bg-secondary)', padding: '20px', borderRadius: '12px', border: '1px solid var(--color-border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '15px', marginBottom: '15px' }}>
+                <div style={{ width: '50px', height: '50px', borderRadius: '50%', background: 'var(--color-primary)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 'bold' }}>
+                  {farmer.name[0]}
+                </div>
+                <div>
+                  <h4 style={{ margin: 0, fontSize: '1.1rem' }}>{farmer.name}</h4>
+                  <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: '0.9rem' }}>📍 {farmer.district}</p>
+                </div>
+              </div>
+              <div style={{ padding: '10px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '8px', fontSize: '0.9rem' }}>
+                <strong>{farmer.productsAvailable}</strong> Products Available
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+
+  const handlePincodeChange = async (pinValue) => {
+    const cleanPin = pinValue.replace(/\D/g, '').slice(0, 6);
+    setProfileData(prev => ({ ...prev, pincode: cleanPin }));
+
+    if (cleanPin.length === 6) {
+      setPincodeStatus('🔍 Calculating coordinates from pincode...');
+      try {
+        const geo = await geocodePincode(cleanPin, profileData.district, profileData.state);
+        if (geo && geo.lat != null && geo.lng != null) {
+          setPincodeStatus(`📍 Calculated coordinates: [${geo.lat.toFixed(4)}, ${geo.lng.toFixed(4)}] (${geo.district}, ${geo.state})`);
+          setProfileData(prev => ({
+            ...prev,
+            pincode: cleanPin,
+            state: prev.state || geo.state,
+            district: prev.district || geo.district,
+          }));
+        } else {
+          setPincodeStatus('⚠️ Pincode entered. Will be resolved on update.');
+        }
+      } catch {
+        setPincodeStatus('');
+      }
+    } else {
+      setPincodeStatus('');
+    }
+  };
+
+  const handleUpdateProfile = async (e) => {
+    if (e) e.preventDefault();
+    setIsUpdatingProfile(true);
+    try {
+      let finalLocation = user.location;
+      // Calculate coordinates on the basis of pincode
+      if (profileData.pincode && /^\d{6}$/.test(profileData.pincode.trim())) {
+        const pinGeo = await geocodePincode(profileData.pincode, profileData.district, profileData.state);
+        if (pinGeo) {
+          finalLocation = { type: 'Point', coordinates: [pinGeo.lng, pinGeo.lat] };
+        }
+      }
+
+      const res = await authFetch('/api/auth/profile', {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: profileData.name,
+          phone: profileData.phone,
+          state: profileData.state,
+          district: profileData.district,
+          address: profileData.address,
+          pincode: profileData.pincode,
+          location: finalLocation,
+        }),
+      });
+
+      if (res.ok) {
+        const updated = await res.json();
+        const updatedUser = {
+          ...currentUser,
+          ...updated,
+        };
+        setCurrentUser(updatedUser);
+        localStorage.setItem('agriconnect_user', JSON.stringify(updatedUser));
+        alert('🎉 Profile updated! Coordinates calculated from pincode: ' + (profileData.pincode || ''));
+        fetchProducts(updated.location);
+      } else {
+        const err = await res.json();
+        alert('Failed to update profile: ' + (err.message || 'Unknown error'));
+      }
+    } catch (err) {
+      alert('Error updating profile: ' + err.message);
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
 
   const renderProfile = () => (
     <>
@@ -471,42 +712,111 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
           {(user.name || 'C')[0].toUpperCase()}
         </div>
         <div className="profile-fields">
-          {[
-            { label: 'Full Name', key: 'name' },
-            { label: 'Email', key: 'email' },
-            { label: 'Phone', key: 'phone' },
-            { label: 'District', key: 'district' },
-            { label: 'Address', key: 'address' },
-          ].map(({ label, key }) => (
-            <div className="profile-field" key={key}>
-              <label>{label}</label>
-              <input
-                type="text"
-                value={profileData[key]}
-                onChange={e => setProfileData(prev => ({ ...prev, [key]: e.target.value }))}
-                placeholder={`Enter ${label.toLowerCase()}`}
-              />
-            </div>
-          ))}
+          <div className="profile-field">
+            <label>Full Name</label>
+            <input
+              type="text"
+              value={profileData.name}
+              onChange={e => setProfileData(prev => ({ ...prev, name: e.target.value }))}
+              placeholder="Your Full Name"
+            />
+          </div>
+          <div className="profile-field">
+            <label>Email</label>
+            <input
+              type="text"
+              value={profileData.email}
+              disabled
+              style={{ opacity: 0.7, cursor: 'not-allowed' }}
+            />
+          </div>
+          <div className="profile-field">
+            <label>Phone</label>
+            <input
+              type="text"
+              value={profileData.phone}
+              onChange={e => setProfileData(prev => ({ ...prev, phone: e.target.value }))}
+              placeholder="Mobile Number"
+            />
+          </div>
+          <div className="profile-field">
+            <label>Pincode (Calculates Delivery Coordinates) *</label>
+            <input
+              type="text"
+              value={profileData.pincode}
+              onChange={e => handlePincodeChange(e.target.value)}
+              placeholder="e.g. 700001, 700039, 400001"
+              maxLength={6}
+            />
+            {pincodeStatus && (
+              <div style={{ fontSize: '0.8rem', marginTop: '4px', color: '#10b981', fontWeight: 600 }}>
+                {pincodeStatus}
+              </div>
+            )}
+          </div>
+          <div className="profile-field">
+            <label>District</label>
+            <input
+              type="text"
+              value={profileData.district}
+              onChange={e => setProfileData(prev => ({ ...prev, district: e.target.value }))}
+              placeholder="District"
+            />
+          </div>
+          <div className="profile-field">
+            <label>State</label>
+            <input
+              type="text"
+              value={profileData.state}
+              onChange={e => setProfileData(prev => ({ ...prev, state: e.target.value }))}
+              placeholder="State"
+            />
+          </div>
+          <div className="profile-field">
+            <label>Street Address</label>
+            <input
+              type="text"
+              value={profileData.address}
+              onChange={e => setProfileData(prev => ({ ...prev, address: e.target.value }))}
+              placeholder="House, Street, Area"
+            />
+          </div>
         </div>
-        <button className="btn-primary" style={{ padding: '12px 32px', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700, background: 'var(--color-primary)', color: '#fff' }}>
-          Update Profile
+        <button
+          className="btn-primary"
+          style={{ padding: '12px 32px', border: 'none', cursor: 'pointer', borderRadius: '8px', fontWeight: 700, background: 'var(--color-primary)', color: '#fff' }}
+          onClick={handleUpdateProfile}
+          disabled={isUpdatingProfile}
+        >
+          {isUpdatingProfile ? 'Updating Profile...' : 'Update Profile & Calculate Coordinates'}
         </button>
         <div style={{ marginTop: '12px' }}>
           <UpdateLocationButton onUpdated={(updated) => {
+            const updatedUser = {
+              ...currentUser,
+              location: updated.location,
+              state:    updated.state    || currentUser.state,
+              district: updated.district || currentUser.district,
+              address:  updated.address  || currentUser.address,
+              pincode:  updated.pincode  || currentUser.pincode,
+            };
+            setCurrentUser(updatedUser);
+            localStorage.setItem('agriconnect_user', JSON.stringify(updatedUser));
             setProfileData(prev => ({
               ...prev,
               state:    updated.state    || prev.state,
               district: updated.district || prev.district,
               address:  updated.address  || prev.address,
+              pincode:  updated.pincode  || prev.pincode,
             }));
+            fetchProducts(updated.location);
           }} />
           {user.location?.coordinates?.length === 2
             ? <p style={{ fontSize: '0.78rem', color: '#86efac', marginTop: 4 }}>
-                📌 Coordinates saved: [{user.location.coordinates[1].toFixed(4)}, {user.location.coordinates[0].toFixed(4)}]
+                📌 Active PostGIS Coordinates: [{user.location.coordinates[1].toFixed(4)}, {user.location.coordinates[0].toFixed(4)}]
               </p>
             : <p style={{ fontSize: '0.78rem', color: '#fca5a5', marginTop: 4 }}>
-                ⚠ No location saved yet — click above to set it.
+                ⚠ No location saved yet — enter Pincode above or click Update Location.
               </p>
           }
         </div>
@@ -518,6 +828,7 @@ const CustomerDashboard = ({ onLogout, onLogoClick }) => {
     switch (activeTab) {
       case 'overview': return renderOverview();
       case 'browse':   return renderBrowseProducts();
+      case 'map':      return renderMap();
       case 'cart':     return renderCart();
       case 'orders':   return renderOrders();
       case 'farmers':  return renderFarmers();

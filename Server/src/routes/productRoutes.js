@@ -10,13 +10,13 @@ import {
   uploadProductImage,
 } from "../controllers/productController.js";
 
-import protect from "../middleware/auth.js";
+import protect, { optionalProtect } from "../middleware/auth.js";
 import authorize from "../middleware/role.js";
 import upload from "../middleware/upload.js";
 
 const router = express.Router();
 
-router.get("/", getAllProducts);
+router.get("/", optionalProtect, getAllProducts);
 
 router.get("/nearby", protect, getNearbyProducts);
 

@@ -6,12 +6,14 @@ import {
   forgotPassword,
   resetPassword,
   logout,
-  updateProfile
+  updateProfile,
+  geocodePincodeEndpoint,
 } from "../controllers/authController.js";
 import protect from "../middleware/auth.js";
 
 const router = express.Router();
 
+router.get("/geocode-pincode", geocodePincodeEndpoint);
 router.post("/send-otp", sendRegistrationOTP);
 router.post("/register", register);
 router.post("/login", login);

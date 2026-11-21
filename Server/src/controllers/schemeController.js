@@ -1,5 +1,6 @@
 import { query } from "../db/index.js";
 import { formatScheme } from "../utils/formatters.js";
+import { broadcastNewScheme } from "../utils/emailNotifier.js";
 
 export const CreateScheme = async (req, res) => {
   try {
@@ -23,9 +24,14 @@ export const CreateScheme = async (req, res) => {
       ]
     );
 
+    const formatted = formatScheme(result.rows[0]);
+
+    // Send real-time Gmail notification to all registered farmers
+    broadcastNewScheme(formatted);
+
     res.status(201).json({
       success: true,
-      scheme: formatScheme(result.rows[0]),
+      scheme: formatted,
     });
   } catch (error) {
     res.status(500).json({

@@ -1,5 +1,6 @@
 import { query } from "../db/index.js";
 import { formatTechnology } from "../utils/formatters.js";
+import { broadcastNewTechnology } from "../utils/emailNotifier.js";
 
 export const addTechnology = async (req, res) => {
   try {
@@ -22,9 +23,14 @@ export const addTechnology = async (req, res) => {
       ]
     );
 
+    const formatted = formatTechnology(result.rows[0]);
+
+    // Send real-time Gmail notification to all registered farmers
+    broadcastNewTechnology(formatted);
+
     res.status(201).json({
       success: true,
-      technology: formatTechnology(result.rows[0]),
+      technology: formatted,
     });
   } catch (error) {
     res.status(500).json({

@@ -154,6 +154,9 @@ const AdminDashboard = ({ onLogout, onLogoClick }) => {
       if (res.ok) {
         setShowModal(false);
         fetchData();
+        if (!isEdit || modalType === 'market-price') {
+          alert(`✅ Published successfully! Real-time Gmail notification dispatched to all registered farmers.`);
+        }
       } else {
         const err = await res.json().catch(() => ({}));
         alert('Failed to save data: ' + (err.message || 'Server error'));

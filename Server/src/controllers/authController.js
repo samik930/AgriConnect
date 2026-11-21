@@ -3,6 +3,24 @@ import { query } from "../db/index.js";
 import generateToken from "../utils/generateToken.js";
 import sendEmail from "../utils/sendEmail.js";
 import { formatUser } from "../utils/formatters.js";
+import { geocodePincode } from "../utils/pincodeGeocode.js";
+
+// Endpoint to geocode any 6-digit Indian pincode
+export const geocodePincodeEndpoint = async (req, res) => {
+  try {
+    const { pincode } = req.query;
+    if (!pincode) {
+      return res.status(400).json({ message: "Pincode query param is required." });
+    }
+    const result = await geocodePincode(pincode);
+    if (!result) {
+      return res.status(404).json({ message: "Unable to calculate coordinates for this pincode." });
+    }
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
 // Generate a 6-digit OTP
 const generateOTP = () => {
@@ -40,7 +58,7 @@ export const sendRegistrationOTP = async (req, res) => {
 
 export const register = async (req, res) => {
   try {
-    const {
+    let {
       name,
       email,
       phone,
@@ -83,6 +101,16 @@ export const register = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+
+    // If pincode is provided, calculate coordinates on the basis of pincode
+    if (pincode && /^\d{6}$/.test(String(pincode).trim())) {
+      const pinGeo = await geocodePincode(pincode, district, state);
+      if (pinGeo) {
+        location = { type: "Point", coordinates: [pinGeo.lng, pinGeo.lat] };
+        if (!state || state === "Unknown") state = pinGeo.state;
+        if (!district || district === "Unknown") district = pinGeo.district;
+      }
+    }
 
     let insertQuery;
     let params;
@@ -245,8 +273,18 @@ export const logout = (req, res) => {
 
 export const updateProfile = async (req, res) => {
   try {
-    const { location, state, district, address, pincode } = req.body;
+    let { location, state, district, address, pincode } = req.body;
     const userId = req.user._id || req.user.id;
+
+    // If pincode is provided, calculate coordinates on the basis of pincode
+    if (pincode && /^\d{6}$/.test(String(pincode).trim())) {
+      const pinGeo = await geocodePincode(pincode, district, state);
+      if (pinGeo) {
+        location = { type: "Point", coordinates: [pinGeo.lng, pinGeo.lat] };
+        if (!state || state === "Unknown") state = pinGeo.state;
+        if (!district || district === "Unknown") district = pinGeo.district;
+      }
+    }
 
     const setClauses = ["updated_at = NOW()"];
     const values = [];

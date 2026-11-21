@@ -36,6 +36,17 @@ app.use("/api/ai", aiRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/trainings", trainingRoutes);
 app.use("/api/market-prices", marketPriceRoutes);
+
+// Google Maps configuration status endpoint
+app.get("/api/config/maps", (req, res) => {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || "";
+  const isConfigured = !!apiKey && !apiKey.includes("your_google_maps_api_key");
+  res.json({
+    isConfigured,
+    apiKey: isConfigured ? apiKey : "",
+  });
+});
+
 app.get("/", (req, res) => {
   res.send("Farmer Marketplace API Running");
 });

@@ -1,5 +1,6 @@
 import { query } from "../db/index.js";
 import { formatTraining } from "../utils/formatters.js";
+import { broadcastNewTraining } from "../utils/emailNotifier.js";
 
 /**
  * 1. Create Training (Admin only)
@@ -23,10 +24,15 @@ export const createTraining = async (req, res) => {
       [title, organizer, new Date(date), location || null, registrationLink || null]
     );
 
+    const formatted = formatTraining(result.rows[0]);
+
+    // Send real-time Gmail notification to all registered farmers
+    broadcastNewTraining(formatted);
+
     res.status(201).json({
       success: true,
       message: "Training workshop created successfully",
-      training: formatTraining(result.rows[0]),
+      training: formatted,
     });
   } catch (error) {
     console.error("Create training error:", error);
