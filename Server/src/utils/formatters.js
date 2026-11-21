@@ -39,6 +39,20 @@ export const formatUser = (userRow) => {
   return user;
 };
 
+/**
+ * Format user for public views (nearby farmers, directory, MCP output) with PII masking
+ */
+export const formatPublicUser = (userRow) => {
+  if (!userRow) return null;
+  const user = formatUser(userRow);
+  delete user.password;
+  if (user.phone && typeof user.phone === "string") {
+    const cleaned = user.phone.replace(/[^\d+]/g, "");
+    user.phone = cleaned.length >= 7 ? cleaned.slice(0, 3) + "******" + cleaned.slice(-4) : "******";
+  }
+  return user;
+};
+
 export const formatProduct = (productRow) => {
   if (!productRow) return null;
 

@@ -12,6 +12,7 @@
     "express-session": "^1.19.0",
     "geolib": "^3.3.14",
     "google-auth-library": "^10.9.0",
+    "groq-sdk": "^1.6.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.2",
     "multer": "^2.5.0",

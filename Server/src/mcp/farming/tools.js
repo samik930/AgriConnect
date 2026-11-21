@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { query } from "../../db/index.js";
 import { formatScheme, formatTechnology } from "../../utils/formatters.js";
-import { cropSuggest, explanation } from "../../services/geminiService.js";
+import { cropSuggest, explanation } from "../../services/llmService.js";
 import { get7DayWeatherForecast } from "../../services/weatherService.js";
 
 /**

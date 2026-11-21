@@ -305,6 +305,29 @@ const ChatBot = ({ user }) => {
                 >
                   <FormattedMessage text={msg.text} />
 
+                  {/* Human-in-the-Loop Confirmation Action Gate */}
+                  {msg.text?.includes('Confirmation Required') && (
+                    <div style={{ marginTop: '10px' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleSend('Confirm and proceed with this action')}
+                        style={{
+                          background: '#10b981',
+                          color: '#ffffff',
+                          border: 'none',
+                          padding: '7px 16px',
+                          borderRadius: '6px',
+                          fontSize: '0.82rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          boxShadow: '0 2px 6px rgba(16, 185, 129, 0.3)',
+                        }}
+                      >
+                        ✅ Confirm & Proceed
+                      </button>
+                    </div>
+                  )}
+
                   {/* Multi-Agent Consultation Badges */}
                   {msg.executionSteps && msg.executionSteps.length > 0 && (
                     <div className="agribot-agent-badges">

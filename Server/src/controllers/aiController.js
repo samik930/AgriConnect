@@ -1,4 +1,4 @@
-import { explanation,cropSuggest } from "../services/geminiService.js";
+import { explanation, cropSuggest } from "../services/llmService.js";
 import { orchestrator } from "../orchestrator/Orchestrator.js";
 
 export const farmingAssistant = async (req, res) => {

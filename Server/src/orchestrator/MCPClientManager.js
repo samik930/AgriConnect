@@ -26,14 +26,18 @@ const SERVER_CONFIGS = {
   },
 };
 
+const DEFAULT_TOOL_TIMEOUT_MS = 12000; // 12-second execution guardrail
+
 class MCPClientManager {
   constructor() {
     this.clients = new Map();
     this.connecting = new Map();
+    this.transports = new Map();
   }
 
   /**
    * Get or initialize an active MCP Client connected to the specified server
+   * Auto-heals and reconnects if transport was dropped.
    * @param {'farming' | 'marketplace' | 'logistics' | 'order-support'} serverKey
    * @returns {Promise<Client>}
    */
@@ -58,6 +62,18 @@ class MCPClientManager {
           args: [config.script],
         });
 
+        // Guardrail: monitor child transport drops and purge dead client
+        if (transport.process) {
+          transport.process.on("exit", (code, signal) => {
+            console.warn(`[MCPManager] Server '${serverKey}' process exited (code=${code}, signal=${signal}). Purging client cache.`);
+            this.purgeClient(serverKey);
+          });
+          transport.process.on("error", (err) => {
+            console.error(`[MCPManager] Transport error in '${serverKey}':`, err.message);
+            this.purgeClient(serverKey);
+          });
+        }
+
         const client = new Client(
           { name: `orchestrator-client-${serverKey}`, version: "1.0.0" },
           { capabilities: {} }
@@ -65,10 +81,12 @@ class MCPClientManager {
 
         await client.connect(transport);
         this.clients.set(serverKey, client);
+        this.transports.set(serverKey, transport);
         this.connecting.delete(serverKey);
         return client;
       } catch (error) {
         this.connecting.delete(serverKey);
+        this.purgeClient(serverKey);
         console.error(`Failed to connect to MCP server '${serverKey}':`, error.message);
         throw error;
       }
@@ -76,6 +94,21 @@ class MCPClientManager {
 
     this.connecting.set(serverKey, connectPromise);
     return connectPromise;
+  }
+
+  /**
+   * Purge client and transport references on error or exit
+   */
+  purgeClient(serverKey) {
+    this.clients.delete(serverKey);
+    this.connecting.delete(serverKey);
+    const transport = this.transports.get(serverKey);
+    if (transport) {
+      try {
+        transport.close();
+      } catch (_) {}
+      this.transports.delete(serverKey);
+    }
   }
 
   /**
@@ -89,36 +122,50 @@ class MCPClientManager {
   }
 
   /**
-   * Invoke a tool on a specific MCP server
+   * Invoke a tool on a specific MCP server with execution timeout guardrail
    * @param {string} serverKey
    * @param {string} toolName
    * @param {object} args
+   * @param {number} timeoutMs
    */
-  async callTool(serverKey, toolName, args = {}) {
-    const client = await this.getClient(serverKey);
-    const result = await client.callTool({
-      name: toolName,
-      arguments: args,
+  async callTool(serverKey, toolName, args = {}, timeoutMs = DEFAULT_TOOL_TIMEOUT_MS) {
+    let timer;
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`MCP Tool '${toolName}' timed out after ${timeoutMs / 1000} seconds.`));
+      }, timeoutMs);
     });
-    return result;
+
+    try {
+      const client = await this.getClient(serverKey);
+      const callPromise = client.callTool({
+        name: toolName,
+        arguments: args,
+      });
+
+      const result = await Promise.race([callPromise, timeoutPromise]);
+      return result;
+    } catch (err) {
+      // If error indicates transport failure, purge client so next call reconnects
+      if (err.message && (err.message.includes("closed") || err.message.includes("EPIPE") || err.message.includes("transport"))) {
+        this.purgeClient(serverKey);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
    * Gracefully close all active client transports
    */
   async closeAll() {
-    for (const [key, client] of this.clients.entries()) {
-      try {
-        await client.close();
-      } catch (e) {
-        console.warn(`Error closing MCP client '${key}':`, e.message);
-      }
+    for (const key of Object.keys(SERVER_CONFIGS)) {
+      this.purgeClient(key);
     }
-    this.clients.clear();
   }
 }
 
 // Singleton manager instance
 export const mcpManager = new MCPClientManager();
 export default mcpManager;
-

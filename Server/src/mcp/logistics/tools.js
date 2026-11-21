@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { query } from "../../db/index.js";
-import { formatProduct, formatUser } from "../../utils/formatters.js";
+import { formatProduct, formatUser, formatPublicUser } from "../../utils/formatters.js";
 
 const DEFAULT_DELIVERY_RADIUS_KM = 50;
 
@@ -39,7 +39,7 @@ export function registerLogisticsTools(server) {
         const res = await query(sql, [longitude, latitude, radiusMeters]);
 
         const farmers = res.rows.map((row) => ({
-          ...formatUser(row),
+          ...formatPublicUser(row),
           distanceKm: parseFloat(row.distance_km),
         }));
 

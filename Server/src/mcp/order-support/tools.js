@@ -286,6 +286,36 @@ export function registerOrderSupportTools(server) {
           };
         }
 
+        // 2b. Guardrail: PostGIS 50 km local delivery boundary check
+        if (prod.farmer_lng != null && prod.farmer_lat != null) {
+          const custRes = await query(
+            "SELECT ST_X(location::geometry) AS lng, ST_Y(location::geometry) AS lat FROM users WHERE id = $1",
+            [customer_id]
+          );
+          if (custRes.rows.length > 0 && custRes.rows[0].lng != null && custRes.rows[0].lat != null) {
+            const c = custRes.rows[0];
+            const distRes = await query(
+              `SELECT ROUND((ST_Distance(
+                 ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+                 ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography
+               ) / 1000)::numeric, 1) AS distance_km`,
+              [c.lng, c.lat, prod.farmer_lng, prod.farmer_lat]
+            );
+            const distKm = parseFloat(distRes.rows[0]?.distance_km || 0);
+            if (distKm > DELIVERY_RADIUS_KM) {
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text",
+                    text: `Cannot add '${prod.name}' to cart: Farm is located ${distKm} km away, which exceeds the mandatory 50 km local delivery limit.`,
+                  },
+                ],
+              };
+            }
+          }
+        }
+
         // 3. Ensure cart exists
         const cartRes = await query(
           `
@@ -428,6 +458,7 @@ export function registerOrderSupportTools(server) {
               FROM products p
               JOIN users u ON p.farmer_id = u.id
               WHERE p.id = $1
+              FOR UPDATE OF p
               `,
               [item.product_id]
             );
